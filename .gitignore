@@ -1,0 +1,14 @@
+# Secrets - 绝对不要提交到 GitHub
+.streamlit/secrets.toml
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.env
+venv/
+.venv/
+
+# OS
+.DS_Store
+Thumbs.db
