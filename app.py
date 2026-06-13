@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import random
 import time
-import anthropic
+
 
 # ── Page config ────────────────────────────────────────────
 st.set_page_config(
@@ -219,34 +219,67 @@ def make_price_chart(history, price, ma200):
     )
     return fig
 
-# ── AI Analysis ─────────────────────────────────────────────
-def run_ai_analysis(price, score):
-    api_key = st.secrets.get("ANTHROPIC_API_KEY", "")
-    if not api_key:
-        return "⚠️ 请在 Streamlit Secrets 中配置 ANTHROPIC_API_KEY。"
-    try:
-        client = anthropic.Anthropic(api_key=api_key)
-        prompt = f"""你是一位专业的黄金投资分析师。基于以下实时市场数据，输出三段纯文本（段间空行，无标题、无markdown、无加粗）：
-第一段：当前形势判断（2-3句）
-第二段：最值得关注的风险（2-3句）
-第三段：给普通投资者的一句话建议
+# ── 规则引擎分析（无需任何 API，完全免费）──────────────────
+def rule_based_analysis(price, score):
+    ma200    = MACRO["ma200"]
+    rsi      = MACRO["rsi"]
+    etf      = MACRO["etf_flow"]
+    tips     = MACRO["tips"]
+    dxy      = MACRO["dxy"]
+    hike     = MACRO["hike_prob"]
+    from_ath = (price - MACRO["ath"]) / MACRO["ath"] * 100
+    upside   = (5400 - price) / price * 100
 
-数据：
-- 现货价格：${price:.0f}（较年初ATH $5,595 跌 {((price-5595)/5595*100):.1f}%）
-- 200日均线：$4,480（金价{"上方" if price > 4480 else "下方"}）
-- RSI(14)：{MACRO['rsi']} / DXY：{MACRO['dxy']} / 10Y TIPS：{MACRO['tips']}%
-- ETF本周净流量：{MACRO['etf_flow']} MOz / 美国CPI：{MACRO['cpi']}%
-- 12月加息概率：{MACRO['hike_prob']}% / Q1央行净购：{MACRO['cb_q1']}吨
-- 机构目标价中位：$5,400 / 综合信号得分：{score}/100"""
+    # ── 第一段：当前形势判断 ──────────────────────────────────
+    if score >= 60:
+        trend = "积极"
+        trend_desc = f"黄金当前综合信号偏多（得分 {score}/100）"
+    elif score >= 45:
+        trend = "中性"
+        trend_desc = f"黄金当前信号中性偏弱（得分 {score}/100）"
+    else:
+        trend = "偏空"
+        trend_desc = f"黄金当前综合信号偏空（得分 {score}/100）"
 
-        message = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=600,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        return message.content[0].text.strip()
-    except Exception as e:
-        return f"⚠️ AI分析暂时不可用：{str(e)}"
+    ma_status = f"价格{'高于' if price > ma200 else '低于'}200日均线（${ma200:,}）" + \
+                ("，技术面维持多头结构。" if price > ma200 else "，技术面已转为偏空，需警惕进一步下行。")
+
+    ath_text = f"金价较年初历史高点 $5,595 已回调 {abs(from_ath):.1f}%，" + \
+               ("具备一定安全边际，机构目标价中位 $5,400 较当前仍有 {:.0f}% 上行空间。".format(upside)
+                if upside > 0 else "已超越机构目标价中位 $5,400。")
+
+    para1 = f"{trend_desc}。{ma_status}{ath_text}"
+
+    # ── 第二段：核心风险 ─────────────────────────────────────
+    risks = []
+    if hike > 60:
+        risks.append(f"美联储12月再度加息概率达 {hike}%，持有不生息黄金的机会成本上升")
+    if etf < -0.2:
+        risks.append(f"黄金ETF本周净流出 {abs(etf):.2f} MOz，西方机构资金持续撤离，短期动量不足")
+    if dxy > 103:
+        risks.append(f"美元指数 DXY 维持在 {dxy} 高位，对金价形成持续压制")
+    if tips > 1.5:
+        risks.append(f"10年期TIPS实际利率 {tips}% 处于高位，持金机会成本较大")
+    if price < ma200:
+        risks.append("金价跌破200日均线，可能触发更多技术性抛压")
+    if not risks:
+        risks.append("当前主要宏观风险已相对充分定价，需警惕地缘局势超预期缓和")
+
+    para2 = "当前最值得关注的风险：" + "；".join(risks[:3]) + "。"
+
+    # ── 第三段：一句话建议 ───────────────────────────────────
+    if score >= 60 and price < ma200 * 0.98:
+        advice = "结构性多头逻辑完整，当前回调区间适合长线投资者分批左侧建仓，控制仓位在总资产15%以内，切勿一次性满仓。"
+    elif score >= 60 and price >= ma200:
+        advice = "技术面与基本面共振向好，可维持多头仓位，但需在 FOMC 等关键节点前适度控制仓位敞口。"
+    elif score >= 45:
+        advice = f"当前信号中性，FOMC（6/16-17）结果将是近期最大方向性催化剂，建议等待结果明朗后再做仓位决策，不宜追涨或追空。"
+    elif rsi < 32:
+        advice = "RSI 已进入超卖区间，短线存在技术性反弹机会，但趋势未明前不建议重仓，可小仓试探并严设止损。"
+    else:
+        advice = "当前多项指标偏空，建议以观望为主，等待金价企稳、ETF资金重新净流入后，再考虑逢低布局。"
+
+    return para1, para2, advice
 
 # ════════════════════════════════════════════════════════════
 # ── MAIN UI ─────────────────────────────────────────────────
@@ -388,24 +421,25 @@ with strat_col:
     st.markdown('</div>', unsafe_allow_html=True)
 
 with ai_col:
-    st.markdown('<div class="card"><div class="card-title">🤖 Claude AI 实时分析</div>', unsafe_allow_html=True)
-    if st.button("重新分析", use_container_width=True):
-        with st.spinner("Claude 正在分析当前黄金市场数据…"):
-            st.session_state.ai_analysis = run_ai_analysis(price, score)
+    st.markdown('<div class="card"><div class="card-title">📊 智能行情分析（规则引擎）</div>', unsafe_allow_html=True)
+
+    if st.button("🔄 重新分析", use_container_width=True):
+        st.session_state.ai_analysis = None
 
     if st.session_state.ai_analysis is None:
-        with st.spinner("Claude 正在分析当前黄金市场数据…"):
-            st.session_state.ai_analysis = run_ai_analysis(price, score)
+        st.session_state.ai_analysis = rule_based_analysis(price, score)
 
-    if st.session_state.ai_analysis:
-        paras = [p.strip() for p in st.session_state.ai_analysis.split("\n\n") if p.strip()]
-        headings = ["当前形势", "主要风险", "投资者建议"]
-        for i, para in enumerate(paras):
-            if i < len(headings):
-                st.markdown(f"**{headings[i]}**")
-            st.markdown(para)
-            if i < len(paras) - 1:
-                st.markdown("---")
+    para1, para2, advice = st.session_state.ai_analysis
+
+    st.markdown("**当前形势**")
+    st.markdown(para1)
+    st.markdown("---")
+    st.markdown("**主要风险**")
+    st.markdown(para2)
+    st.markdown("---")
+    st.markdown("**投资者建议**")
+    st.info(advice)
+
     st.markdown('</div>', unsafe_allow_html=True)
 
 st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
