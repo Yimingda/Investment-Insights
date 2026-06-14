@@ -18,18 +18,20 @@ class AShareModule(AssetModule):
     accent = "#e0533d"
     price_prefix = "¥"
     price_decimals = 2
-
-    def scan_series(self):
-        res = data.ak_index_history("sh000300")
-        return res[0] if res else None
+    scan_ticker = "000300.SS"   # 沪深300（yfinance，云端可用）
 
     def build_snapshot(self, refresh: bool = False) -> Snapshot:
-        res = data.ak_index_history("sh000300")
+        # 主源 yfinance(000300.SS，云端友好) → akshare(本地增强) → 模拟
+        res = data.yf_history("000300.SS", period="1y")
         if res and res[0]:
-            closes, dates, live = res[0], res[1], True
+            closes, dates, live, src = res[0], res[1], True, "实时 (000300.SS)"
         else:
-            closes, dates = self.sim_fallback(ANCHORS, refresh)
-            live = False
+            ak = data.ak_index_history("sh000300")
+            if ak and ak[0]:
+                closes, dates, live, src = ak[0], ak[1], True, "实时 (akshare 沪深300)"
+            else:
+                closes, dates = self.sim_fallback(ANCHORS, refresh)
+                live, src = False, "示例数据（未连实时源）"
         price = closes[-1]
 
         ma60 = indicators.sma(closes, 60) if len(closes) >= 60 else indicators.sma(closes, 20)
@@ -119,7 +121,7 @@ class AShareModule(AssetModule):
             strategies=strategies, related=related,
             ma_ref=ma60, ma_label=f"MA60 ¥{ma60:,.0f}",
             extra_cards=extra, data_live=live,
-            source_note="实时 (akshare 沪深300)" if live else "示例数据（akshare 未连）",
+            source_note=src,
             ai_facts={
                 "均线结构": "多头(MA20>MA60)" if ma20 and ma60 and ma20 > ma60 else "空头(MA20<MA60)",
                 "20日动量": f"{mom20:+.1f}%",
@@ -147,22 +149,22 @@ class AShareModule(AssetModule):
         return "中性", "badge-neu"
 
     def _related(self):
-        # A股相关指数：尝试 akshare，失败用示例值
+        # 相关资产用 yfinance（云端可用）：A股指数 + 中概 ETF + 恒生
         specs = [
-            ("上证指数", "sh000001", 3250), ("深证成指", "sz399001", 10200),
-            ("创业板指", "sz399006", 2050), ("中证500", "sh000905", 5800),
-            ("科创50", "sh000688", 1050), ("沪深300", "sh000300", 4120),
+            ("上证综指", "000001.SS", 4030, "¥"), ("深证成指", "399001.SZ", 14900, "¥"),
+            ("沪深300ETF ASHR", "ASHR", 30, "$"), ("中国大盘 FXI", "FXI", 38, "$"),
+            ("中概互联 KWEB", "KWEB", 35, "$"), ("恒生指数", "^HSI", 24000, ""),
         ]
         out = []
-        for name, sym, fb in specs:
-            res = data.ak_index_history(sym)
-            if res and len(res[0]) >= 2:
+        for name, tkr, fb, pre in specs:
+            res = data.yf_history(tkr, period="5d")
+            if res and len(res[0]) >= 2 and res[0][-2]:
                 p, prev = res[0][-1], res[0][-2]
-                chg = (p - prev) / prev * 100 if prev else 0
+                chg = (p - prev) / prev * 100
             else:
                 p, chg = fb, 0.0
             up = chg >= 0
-            out.append(Related(name, f"¥{p:,.2f}", f"{'+' if up else ''}{chg:.2f}%", up))
+            out.append(Related(name, f"{pre}{p:,.2f}", f"{'+' if up else ''}{chg:.2f}%", up))
         return out
 
     def _northbound_card(self, north):
