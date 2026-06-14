@@ -2,3 +2,9 @@ streamlit>=1.35.0
 plotly>=5.20.0
 pandas>=2.0.0
 requests>=2.31.0
+# 实时行情：股票/ETF/外汇/加密/期货/指数
+yfinance>=0.2.40
+# 智能分析（可选；无 key 时自动降级到规则引擎）
+anthropic>=0.40.0
+# A股数据（较重；Python 3.14 上若安装失败，A股会降级到示例数据）
+akshare>=1.14.0

@@ -1,39 +1,52 @@
-# 🥇 Au Watch · 黄金行情监控
+# 📊 多品种投资建议面板
 
-基于 Streamlit + Claude AI 构建的黄金投资监控 Dashboard，支持一键部署到 Streamlit Cloud。
+基于 Streamlit + Claude AI 的多品种投资监控 Dashboard。一套 UI 渲染多个品种，
+数据接入免费实时行情，缺失时自动降级到示例数据，可一键部署到 Streamlit Cloud。
 
-## 功能
+## 支持品种
 
-- 📊 实时价格走势图 + 技术指标（MA200、RSI、DXY、TIPS、ETF资金流）
-- 🎯 综合信号仪表盘（0-100 评分）
-- 🤖 Claude AI 实时分析（形势判断 + 风险 + 建议）
-- 📋 四种策略推荐（长线 / 中线 / 短线 / 已持仓）
-- 🏦 机构目标价追踪（高盛、JPMorgan、UBS 等）
-- 🌡️ 风险因子热力图
-- 📈 相关资产监控（白银、GLD、GDX、DXY、原油）
+| 品种 | 主标的 | 实时数据源 |
+|------|--------|-----------|
+| 🥇 黄金 | XAU/USD（GC=F） | yfinance + FRED(可选) |
+| ₿ 加密货币 | BTC/USD | yfinance + 恐惧贪婪(alternative.me) + 链上/市值(CoinGecko、blockchain.info) |
+| 🇺🇸 美股 | 标普500 (SPY) | yfinance + 实时 VIX、板块ETF |
+| 🇨🇳 A股 | 沪深300 | akshare（指数 + 北向资金） |
+| 💱 外汇 | USD/CNY 在岸人民币 | yfinance（含 DXY、主要货币对、离岸CNH） |
 
-## 部署到 Streamlit Cloud（3步）
+每个品种都提供：价格走势图 + 均线、综合信号仪表盘（0-100 评分）、关键指标、
+四种策略推荐（长/中/短线 / 已持仓）、相关资产监控、品种专属面板，以及智能行情分析。
 
-### 第一步：Push 到 GitHub
-```bash
-git add .
-git commit -m "feat: add streamlit gold monitor"
-git push
+## 架构
+
+```
+app.py                 # 入口：品种切换 + 共享 Dashboard 渲染器
+lib/                   # 共享基础设施
+  model.py             # 数据模型（Snapshot / Indicator / Strategy…）
+  indicators.py        # 纯函数：SMA / RSI / 动量 / 回撤
+  theme.py             # 暗色主题 CSS + Plotly 图表
+  data.py              # yfinance / FRED / akshare / 恐惧贪婪 抓取 + 缓存 + 降级
+  ai.py                # Claude 分析 + 规则引擎降级
+assets/                # 各品种模块（实现统一接口）
+  base.py              # 品种基类 + 实时/模拟数据工具
+  gold.py / crypto.py / us_equity.py / a_share.py / forex.py
 ```
 
-### 第二步：在 Streamlit Cloud 创建 App
-1. 打开 [share.streamlit.io](https://share.streamlit.io)
-2. 点击 **New app**
-3. 选择你的 GitHub 仓库和 `app.py`
-4. 点击 **Deploy**
+品种专属指标举例：黄金（机构目标价、风险热力图）、加密（恐惧贪婪指数、BTC市占率、全网算力、链上交易）、
+美股（VIX、板块ETF）、A股（北向资金、估值情绪）、外汇（DXY、主要货币对、换汇时机）。
 
-### 第三步：配置 Secrets
-在 App Settings → Secrets 中填写：
-```toml
-ANTHROPIC_API_KEY = "sk-ant-你的密钥"
-```
+**加新品种**：在 `assets/` 新建一个模块，实现 `build_snapshot(refresh) -> Snapshot`，
+然后在 `assets/__init__.py` 的 `REGISTRY` 注册即可，UI 无需改动。
 
-> 获取 Anthropic API Key：[console.anthropic.com](https://console.anthropic.com)
+## 数据与降级策略
+
+- **优先实时**：能拿到行情就用真实数据（走势、均线、RSI 等据此计算）。
+- **优雅降级**：库未安装或网络失败时，自动回退到示例数据，界面照常可用（状态条会标注数据源）。
+- 黄金的 TIPS 实际利率、ETF 资金流、央行购金等无免费实时源的指标，作为可调的编辑性输入。
+
+## 智能分析
+
+- 配置了 `ANTHROPIC_API_KEY` → 点击「用 Claude 深度分析」调用 Claude（默认 `claude-opus-4-8`）。
+- 未配置或调用失败 → 自动使用内置**规则引擎**，完全免费、无需联网。
 
 ## 本地运行
 
@@ -42,19 +55,19 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-本地运行需在 `.streamlit/secrets.toml` 中填写你的 API Key（已加入 .gitignore，不会被提交）。
+本地把密钥填到 `.streamlit/secrets.toml`（已在 .gitignore，不会提交）。
 
-## 文件结构
+快速回归自检（无需网络）：`python tests/test_smoke.py`
 
-```
-├── app.py                    # 主程序
-├── requirements.txt          # 依赖
-├── .streamlit/
-│   ├── config.toml           # 暗色主题配置
-│   └── secrets.toml          # API密钥（本地用，不提交）
-└── README.md
-```
+> 兼容性：已在 **Python 3.14** 实测 `streamlit / yfinance / anthropic / akshare` 均可正常安装与运行。
+> A股北向资金的**盘中实时净额**因交易所自 2024-08 起停止披露而不可用（面板会如实说明），不影响指数/均线/RSI 等其余指标。
+
+## 部署到 Streamlit Cloud
+
+1. `git push` 到 GitHub
+2. [share.streamlit.io](https://share.streamlit.io) → New app → 选仓库与 `app.py` → Deploy
+3. App Settings → Secrets 填写 `ANTHROPIC_API_KEY`（可选 `FRED_API_KEY`、`ANTHROPIC_MODEL`）
 
 ## ⚠️ 免责声明
 
-本工具仅供参考，不构成投资建议。黄金投资存在本金损失风险，请结合自身风险承受能力审慎决策。
+本工具仅供参考，不构成投资建议。投资有风险，入市需谨慎，请结合自身风险承受能力审慎决策。
