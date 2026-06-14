@@ -136,6 +136,40 @@ def make_price_chart(history: list[float], dates: list[str], price: float,
     return fig
 
 
+def make_bar(x: list, y: list, accent: str = DEFAULT_ACCENT, prefix: str = "$") -> go.Figure:
+    """竖向柱状图（花费趋势）。"""
+    fig = go.Figure(go.Bar(
+        x=x, y=y, marker_color=accent,
+        hovertemplate="%{x}<br>" + prefix + "%{y:,.2f}<extra></extra>"))
+    fig.update_layout(
+        height=240, margin=dict(l=10, r=10, t=10, b=30),
+        paper_bgcolor="#111318", plot_bgcolor="#111318",
+        font=dict(color="#5a6070", size=10), showlegend=False,
+        xaxis=dict(showgrid=False, color="#5a6070"),
+        yaxis=dict(showgrid=True, gridcolor="#1e2130", color="#5a6070",
+                   tickprefix=prefix, tickformat=","))
+    return fig
+
+
+def make_hbar(labels: list, values: list, accent: str = DEFAULT_ACCENT,
+              prefix: str = "$") -> go.Figure:
+    """横向柱状图（按维度看消耗占比），按值升序使最大项在顶部。"""
+    pairs = sorted(zip(values, labels))
+    vals = [v for v, _ in pairs]
+    labs = [l for _, l in pairs]
+    fig = go.Figure(go.Bar(
+        x=vals, y=labs, orientation="h", marker_color=accent,
+        hovertemplate="%{y}<br>" + prefix + "%{x:,.2f}<extra></extra>"))
+    fig.update_layout(
+        height=max(220, 30 * len(labs) + 50), margin=dict(l=10, r=10, t=10, b=20),
+        paper_bgcolor="#111318", plot_bgcolor="#111318",
+        font=dict(color="#5a6070", size=10), showlegend=False,
+        xaxis=dict(showgrid=True, gridcolor="#1e2130", color="#5a6070",
+                   tickprefix=prefix, tickformat=","),
+        yaxis=dict(color="#c9ccd6"))
+    return fig
+
+
 def _hex_to_rgba(hex_color: str, alpha: float) -> str:
     h = hex_color.lstrip("#")
     r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)

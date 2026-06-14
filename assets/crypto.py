@@ -19,6 +19,7 @@ class CryptoModule(AssetModule):
     accent = "#f7931a"
     price_prefix = "$"
     price_decimals = 0
+    scan_ticker = "BTC-USD"
 
     def build_snapshot(self, refresh: bool = False) -> Snapshot:
         closes, dates, live = self.series_or_sim("BTC-USD", ANCHORS, period="1y", refresh=refresh)

@@ -19,12 +19,20 @@ class AssetModule:
     accent: str = DEFAULT_ACCENT
     price_prefix: str = "$"
     price_decimals: int = 2
+    scan_ticker: str = ""   # 跨品种预警扫描用的主 yfinance 代码（A股等可覆盖 scan_series）
 
     def fmt_price(self, p: float) -> str:
         return f"{self.price_prefix}{p:,.{self.price_decimals}f}"
 
     def build_snapshot(self, refresh: bool = False) -> Snapshot:  # pragma: no cover
         raise NotImplementedError
+
+    def scan_series(self) -> list[float] | None:
+        """供跨品种预警用的主收盘价序列（实时，拿不到返回 None）。"""
+        if not self.scan_ticker:
+            return None
+        res = data.yf_history(self.scan_ticker, period="1y")
+        return res[0] if res else None
 
     # ── 共享指标：MACD（数据不足时返回 None，调用方忽略即可）──
     def macd_row(self, closes: list[float]) -> Indicator | None:

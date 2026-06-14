@@ -32,6 +32,7 @@ class GoldModule(AssetModule):
     accent = "#d4a520"
     price_prefix = "$"
     price_decimals = 0
+    scan_ticker = "GC=F"
 
     def build_snapshot(self, refresh: bool = False) -> Snapshot:
         closes, dates, live = self.series_or_sim("GC=F", ANCHORS, period="1y", refresh=refresh)

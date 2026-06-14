@@ -14,7 +14,15 @@
 | 💱 外汇 | USD/CNY 在岸人民币 | yfinance（含 DXY、主要货币对、离岸CNH） |
 
 每个品种都提供：价格走势图 + 均线、综合信号仪表盘（0-100 评分）、关键指标、
-四种策略推荐（长/中/短线 / 已持仓）、相关资产监控、品种专属面板，以及智能行情分析。
+四种策略推荐（长/中/短线 / 已持仓）、相关资产监控、品种专属面板、**投资日历**（按品种过滤的近期关键事件），以及智能行情分析。
+
+**投资日历**：每页展示与该品种相关的未来大事（FOMC/CPI/非农、LPR、期权到期/三巫、CME 比特币到期、权重股财报、两会等），按重要性 ★ 分级、高亮 7 天内。配置 `FINNHUB_API_KEY`（[finnhub.io](https://finnhub.io) 免费）走实时财经/财报日历，否则降级为规则推算的关键事件。
+
+**实时新闻 + 全市场预警**（均基于实时数据，与模型知识截止无关）：
+- 📰 每页展示与该品种相关的实时新闻（A股用 akshare 中文快讯，其余用 Finnhub 分类新闻），并把头条**一并喂给 AI 分析作消息面参考**。
+- 🔔 顶部"全市场实时预警"扫描全部品种的实时阈值信号：跌破均线、RSI 超买/超卖、单日大幅波动——让你在任一页面都能看到其他品种的异动。
+
+**💰 API 花费监控**（顶部"💰 API花费"视图）：调用 Anthropic Cost Admin API 展示你账户的**每日花费趋势**（柱状图）与**消耗结构**（按模型/项目看哪里花得多）。需 `ANTHROPIC_ADMIN_KEY`（`sk-ant-admin...`，Console → Settings → Admin keys，仅组织 admin 可创建；⚠️ 权限大、勿提交）。未配置则显示示例数据 + 接入指引。
 
 ## 架构
 
@@ -66,7 +74,7 @@ streamlit run app.py
 
 1. `git push` 到 GitHub
 2. [share.streamlit.io](https://share.streamlit.io) → New app → 选仓库与 `app.py` → Deploy
-3. App Settings → Secrets 填写 `ANTHROPIC_API_KEY`（可选 `FRED_API_KEY`、`ANTHROPIC_MODEL`）
+3. App Settings → Secrets 填写 `ANTHROPIC_API_KEY`（可选 `FINNHUB_API_KEY`、`ANTHROPIC_ADMIN_KEY`、`FRED_API_KEY`、`ANTHROPIC_MODEL`）
 
 ## ⚠️ 免责声明
 

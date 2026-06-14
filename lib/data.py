@@ -205,3 +205,26 @@ def ak_northbound():
         return round(total, 2)
     except Exception:
         return None
+
+
+# ── A股中文财经快讯（akshare）──────────────────────────────
+@st.cache_data(ttl=1800, show_spinner=False)
+def ak_global_news(limit: int = 6):
+    """返回 [(标题, 来源, 时间, url), ...] 或 None。"""
+    ak = _ak()
+    if ak is None:
+        return None
+    try:
+        df = ak.stock_info_global_em()
+        if df is None or df.empty:
+            return None
+        tcol = next((c for c in df.columns if "标题" in c), df.columns[0])
+        wcol = next((c for c in df.columns if "时间" in c), None)
+        out = []
+        for _, row in df.head(limit).iterrows():
+            title = str(row[tcol]).strip()
+            when = str(row[wcol])[5:16] if wcol else ""
+            out.append((title, "东财快讯", when, ""))
+        return out or None
+    except Exception:
+        return None

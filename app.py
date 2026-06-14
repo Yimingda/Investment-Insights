@@ -5,10 +5,10 @@
 分析：有 ANTHROPIC_API_KEY 用 Claude，否则用规则引擎。
 """
 import streamlit as st
-from datetime import datetime
+from datetime import datetime, date
 
-from lib import data, ai
-from lib.theme import CSS, make_gauge, make_price_chart
+from lib import data, ai, events, news, alerts, usage
+from lib.theme import CSS, make_gauge, make_price_chart, make_bar, make_hbar
 from assets import REGISTRY, get_module
 
 # ── Page config ─────────────────────────────────────────────
@@ -29,9 +29,82 @@ def anthropic_key() -> str | None:
     return None
 
 
+def render_cost_page():
+    """💰 API 花费监控页：Anthropic Cost Admin API 的趋势 + 消耗结构。"""
+    st.markdown("## 💰 API 花费监控")
+    admin = data.secret("ANTHROPIC_ADMIN_KEY")
+    valid = usage.is_admin_key(admin)
+    days = st.radio("时间范围", [7, 30, 90], index=1, horizontal=True,
+                    format_func=lambda d: f"近 {d} 天", label_visibility="collapsed")
+
+    rep = usage.cost_report(admin, days) if valid else None
+    is_sample = rep is None
+    if rep is None:
+        rep = usage.sample_report(days)
+
+    if is_sample:
+        st.markdown('<div class="alert-warn">⚠️ 当前为<b>示例数据</b>（未配置有效 ANTHROPIC_ADMIN_KEY）。'
+                    '配置后将显示你账户的真实花费。</div>', unsafe_allow_html=True)
+
+    daily = rep["daily"]
+    by = rep["by_label"]
+    total = rep["total"]
+    avg = total / max(1, len(daily))
+    mx = max((v for _, v in daily), default=0.0)
+    top = max(by.items(), key=lambda kv: kv[1]) if by else ("-", 0.0)
+
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric(f"近{days}天总花费", f"${total:,.2f}")
+    k2.metric("日均花费", f"${avg:,.2f}")
+    k3.metric("最大单日", f"${mx:,.2f}")
+    k4.metric("最大消耗项", top[0], f"${top[1]:,.2f}")
+
+    c1, c2 = st.columns([3, 2])
+    with c1:
+        st.markdown('<div class="card"><div class="card-title">每日花费趋势 (USD)</div>',
+                    unsafe_allow_html=True)
+        if daily:
+            st.plotly_chart(make_bar([d[5:] for d, _ in daily], [v for _, v in daily]),
+                            width="stretch", config={"displayModeBar": False})
+        else:
+            st.markdown('<div style="color:#5a6070;font-size:12px;padding:12px 0">该时间段暂无花费数据。</div>',
+                        unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+    with c2:
+        st.markdown('<div class="card"><div class="card-title">消耗结构 · 哪里花得多</div>',
+                    unsafe_allow_html=True)
+        if by:
+            items = sorted(by.items(), key=lambda kv: -kv[1])[:8]
+            st.plotly_chart(make_hbar([k for k, _ in items], [v for _, v in items]),
+                            width="stretch", config={"displayModeBar": False})
+            for label, val in items:
+                pct = val / total * 100 if total else 0
+                st.markdown(
+                    f'<div style="display:flex;justify-content:space-between;font-size:11px;'
+                    f'padding:3px 0;border-bottom:1px solid #1e2130">'
+                    f'<span style="color:#c9ccd6">{label}</span>'
+                    f'<span style="font-family:monospace">${val:,.2f} '
+                    f'<span style="color:#5a6070">({pct:.0f}%)</span></span></div>',
+                    unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    if is_sample:
+        st.markdown(
+            '<div class="card"><div class="card-title">如何接入真实花费</div>'
+            '<div style="font-size:12px;line-height:1.8;color:#c9ccd6">'
+            '1. 打开 <b>Claude Console → Settings → Admin keys</b>（需组织 admin 角色），创建 Admin API key（<code>sk-ant-admin...</code>）。<br>'
+            '2. 填入 <code>.streamlit/secrets.toml</code>：<code>ANTHROPIC_ADMIN_KEY = "sk-ant-admin..."</code>（已 .gitignore，不会提交）。<br>'
+            '3. 刷新本页即可看到真实花费趋势与消耗结构。<br>'
+            '<span style="color:#e08030">⚠️ Admin key 权限较大，请妥善保管、切勿提交到代码库。个人账户需先在 Console 建立组织。</span>'
+            '</div></div>', unsafe_allow_html=True)
+    st.markdown("""<div style='text-align:center;font-size:10px;color:#3a3e4a;padding:8px'>
+    数据来自 Anthropic Cost Admin API（约 5 分钟延迟）· 金额为美元</div>""", unsafe_allow_html=True)
+
+
 # ── 顶部：品种切换 + 状态 ────────────────────────────────────
-ids = [m.id for m in REGISTRY]
+ids = [m.id for m in REGISTRY] + ["__cost__"]
 labels = {m.id: f"{m.icon} {m.name}" for m in REGISTRY}
+labels["__cost__"] = "💰 API花费"
 
 top_l, top_r = st.columns([4, 1])
 with top_l:
@@ -40,15 +113,20 @@ with top_r:
     refresh = st.button("⟳ 刷新数据", width="stretch")
 
 asset_id = st.radio(
-    "选择品种", ids, format_func=lambda i: labels[i],
+    "选择视图", ids, format_func=lambda i: labels[i],
     horizontal=True, label_visibility="collapsed",
 )
-module = get_module(asset_id)
 
 if refresh:
     st.cache_data.clear()
     st.session_state["_do_refresh"] = True
 
+# 花费监控是独立视图（非品种），单独渲染后结束
+if asset_id == "__cost__":
+    render_cost_page()
+    st.stop()
+
+module = get_module(asset_id)
 do_refresh = st.session_state.pop("_do_refresh", False)
 snap = module.build_snapshot(refresh=do_refresh)
 
@@ -64,6 +142,25 @@ st.markdown(
     unsafe_allow_html=True,
 )
 st.divider()
+
+# ── 跨品种实时预警 + 当前品种实时新闻（均基于实时数据）──────
+_finnhub = data.secret("FINNHUB_API_KEY")
+market_alerts = alerts.scan(REGISTRY)
+if market_alerts:
+    _ac = {"alert-dn": "#e05555", "alert-warn": "#e08030", "alert-up": "#3dba6a"}
+    chips = ""
+    for _m, cls, text in market_alerts[:8]:
+        col = _ac.get(cls, "#5a6070")
+        chips += (f'<span style="display:inline-block;margin:2px 6px 2px 0;padding:3px 9px;'
+                  f'border-radius:5px;font-size:11px;background:{col}1a;color:{col};'
+                  f'border:1px solid {col}55">{text}</span>')
+    st.markdown(f"<div style='margin:0 0 8px'><span style='font-size:11px;color:#5a6070'>"
+                f"🔔 全市场实时预警（基于实时行情阈值）</span><br>{chips}</div>",
+                unsafe_allow_html=True)
+
+# 当前品种实时新闻：喂给 AI 分析 + 页面展示
+news_items = news.headlines(asset_id, api_key=_finnhub)
+news_titles = [h.title for h in news_items]
 
 # ── KPI Strip ───────────────────────────────────────────────
 cols = st.columns(len(snap.kpis))
@@ -128,10 +225,11 @@ with ai_col:
     if force_claude and key:
         with st.spinner("Claude 分析中…"):
             st.session_state[cache_key] = ai.analyze(
-                module.name, snap, api_key=key, model=data.secret("ANTHROPIC_MODEL"))
+                module.name, snap, api_key=key,
+                model=data.secret("ANTHROPIC_MODEL"), news=news_titles)
     elif cache_key not in st.session_state:
         # 默认即时显示（无 key 用规则引擎；不主动消耗 Claude 额度）
-        st.session_state[cache_key] = ai.analyze(module.name, snap)
+        st.session_state[cache_key] = ai.analyze(module.name, snap, news=news_titles)
 
     situation, risks, advice, by_claude = st.session_state[cache_key]
     badge = ("<span class='badge badge-up'>Claude AI</span>" if by_claude
@@ -141,6 +239,66 @@ with ai_col:
     st.markdown("**主要风险**"); st.markdown(risks)
     st.markdown("**投资者建议**"); st.info(advice)
     st.markdown('</div>', unsafe_allow_html=True)
+
+st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
+
+# ── 实时新闻 + 投资日历（2列，每页都有，均基于实时数据）──────
+news_col, cal_col = st.columns(2)
+
+with news_col:
+    nsrc = ("<span class='badge badge-up'>实时</span>" if news_items
+            else "<span class='badge badge-neu'>未配置/暂无</span>")
+    if news_items:
+        inner = ""
+        for h in news_items:
+            meta = " · ".join(x for x in [h.source, h.when] if x)
+            title = (f'<a href="{h.url}" target="_blank" style="color:#e4e6ee;text-decoration:none">{h.title}</a>'
+                     if h.url else f'<span style="color:#e4e6ee">{h.title}</span>')
+            inner += (f'<div style="padding:7px 4px;border-bottom:1px solid #1e2130">'
+                      f'<div style="font-size:12px;line-height:1.4">{title}</div>'
+                      f'<div style="font-size:9px;color:#5a6070;margin-top:2px">{meta}</div></div>')
+    else:
+        inner = ('<div style="font-size:11px;color:#5a6070;padding:8px 0;line-height:1.6">'
+                 '暂无实时新闻：A股需 akshare，其余品种需配置 FINNHUB_API_KEY。'
+                 '<br>分析仍基于实时行情数据，不受影响。</div>')
+    st.markdown(
+        f'<div class="card"><div class="card-title">📰 实时新闻 {nsrc}</div>{inner}'
+        f'<div style="font-size:9px;color:#5a6070;margin-top:8px">'
+        f'已随当前行情一并提供给 AI 分析作消息面参考</div></div>',
+        unsafe_allow_html=True,
+    )
+
+with cal_col:
+    cal = events.upcoming_for(asset_id, api_key=_finnhub)
+    _today = date.today()
+    _imp_color = {3: "#e05555", 2: "#e08030", 1: "#5a6070"}
+    cal_live = any(e.live for e in cal)
+    src_tag = ("<span class='badge badge-up'>实时日历</span>" if cal_live
+               else "<span class='badge badge-neu'>规则推算</span>")
+    rows_html = ""
+    for e in cal:
+        dd = (e.day - _today).days
+        when = "今天" if dd == 0 else ("明天" if dd == 1 else f"{dd}天后")
+        c = _imp_color.get(e.importance, "#5a6070")
+        bg = "background:rgba(224,128,48,.06);" if dd <= 7 else ""
+        note = f" · {e.note}" if e.note else ""
+        rows_html += (
+            f'<div style="display:flex;align-items:center;gap:10px;padding:7px 4px;'
+            f'border-bottom:1px solid #1e2130;{bg}">'
+            f'<div style="min-width:92px;font-family:monospace;font-size:11px;color:#c9ccd6">'
+            f'{e.day.strftime("%m/%d")} <span style="color:#5a6070">{when}</span></div>'
+            f'<div style="flex:1;font-size:12px;color:#e4e6ee">{e.title}'
+            f'<span style="color:#5a6070;font-size:11px">{note}</span></div>'
+            f'<div style="color:{c};font-size:11px;min-width:34px;text-align:right">{"★" * e.importance}</div>'
+            f'</div>')
+    if not rows_html:
+        rows_html = '<div style="font-size:11px;color:#5a6070;padding:8px 0">近期暂无相关日程。</div>'
+    st.markdown(
+        f'<div class="card"><div class="card-title">📅 投资日历 · 近45天 {src_tag}</div>{rows_html}'
+        f'<div style="font-size:9px;color:#5a6070;margin-top:8px">'
+        f'★越多越重磅 · 橙色底=7天内 · 仅当前品种相关 · 配 FINNHUB_API_KEY 走实时日历</div></div>',
+        unsafe_allow_html=True,
+    )
 
 st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
 

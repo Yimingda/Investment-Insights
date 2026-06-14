@@ -19,6 +19,10 @@ class AShareModule(AssetModule):
     price_prefix = "¥"
     price_decimals = 2
 
+    def scan_series(self):
+        res = data.ak_index_history("sh000300")
+        return res[0] if res else None
+
     def build_snapshot(self, refresh: bool = False) -> Snapshot:
         res = data.ak_index_history("sh000300")
         if res and res[0]:

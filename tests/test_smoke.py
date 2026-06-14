@@ -41,7 +41,7 @@ def _install_stubs():
 
 def main():
     _install_stubs()
-    from lib import data, ai, indicators
+    from lib import data, ai, indicators, events, news, alerts, usage
     from lib.model import Snapshot
 
     # 强制离线：所有外部数据源返回 None → 走降级路径
@@ -68,8 +68,26 @@ def main():
         assert s and r and a and by_claude is False, m.id
         # 分析文字应与仪表盘标签一致
         assert snap.score_label in s, (m.id, "形势文字未引用评分标签")
+        # 投资日历（无 key → 规则推算路径），应返回与本品种相关的未来事件
+        cal = events.upcoming_for(m.id, api_key=None)
+        assert isinstance(cal, list) and len(cal) >= 1, (m.id, "日历为空")
+        assert all(m.id in e.assets for e in cal), (m.id, "日历事件与品种不相关")
+        assert all(e.live is False for e in cal), (m.id, "无 key 时不应有 live 事件")
         print(f"  ✓ {m.id:9} score={snap.score:>2}/{snap.score_label} "
-              f"指标={len(snap.indicators)} 卡={len(snap.extra_cards)}")
+              f"指标={len(snap.indicators)} 卡={len(snap.extra_cards)} 日历={len(cal)}事件")
+
+    # 实时新闻（离线/无 key → 空列表，不报错）
+    for m in REGISTRY:
+        assert isinstance(news.headlines(m.id, api_key=None), list), (m.id, "news 非 list")
+    # 跨品种阈值预警扫描（离线 → 空列表，不报错）
+    scanned = alerts.scan(REGISTRY)
+    assert isinstance(scanned, list)
+    # API 花费：无 admin key → None（降级示例）；示例数据结构正确
+    assert usage.cost_report(None) is None
+    assert usage.is_admin_key("sk-ant-admin01-xyz") and not usage.is_admin_key("sk-ant-api-xyz")
+    samp = usage.sample_report(30)
+    assert samp["daily"] and samp["by_label"] and samp["total"] > 0
+    print(f"  ✓ news / alerts / usage 接口降级正常（扫描预警 {len(scanned)} 条）")
 
     print(f"OK: {len(REGISTRY)} 个品种全部通过离线冒烟测试")
 

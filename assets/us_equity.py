@@ -18,6 +18,7 @@ class USEquityModule(AssetModule):
     accent = "#4c8bf5"
     price_prefix = "$"
     price_decimals = 2
+    scan_ticker = "SPY"
 
     def build_snapshot(self, refresh: bool = False) -> Snapshot:
         closes, dates, live = self.series_or_sim("SPY", ANCHORS, period="1y", refresh=refresh)

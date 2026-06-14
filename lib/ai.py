@@ -33,17 +33,19 @@ _SCHEMA = {
 
 # ── 对外接口 ─────────────────────────────────────────────────
 def analyze(asset_name: str, snap: Snapshot, api_key: str | None = None,
-            model: str | None = None) -> tuple[str, str, str, bool]:
+            model: str | None = None,
+            news: list[str] | None = None) -> tuple[str, str, str, bool]:
     if api_key:
-        out = _claude_analyze(asset_name, snap, api_key, model or DEFAULT_MODEL)
+        out = _claude_analyze(asset_name, snap, api_key, model or DEFAULT_MODEL, news)
         if out is not None:
             return out[0], out[1], out[2], True
-    s, r, a = _rule_based(asset_name, snap)
+    s, r, a = _rule_based(asset_name, snap, news)
     return s, r, a, False
 
 
 # ── Claude 实现 ──────────────────────────────────────────────
-def _claude_analyze(asset_name: str, snap: Snapshot, api_key: str, model: str):
+def _claude_analyze(asset_name: str, snap: Snapshot, api_key: str, model: str,
+                    news: list[str] | None = None):
     try:
         import anthropic
     except Exception:
@@ -59,7 +61,7 @@ def _claude_analyze(asset_name: str, snap: Snapshot, api_key: str, model: str):
                 "format": {"type": "json_schema", "schema": _SCHEMA},
             },
             system=_SYSTEM,
-            messages=[{"role": "user", "content": _build_facts_text(asset_name, snap)}],
+            messages=[{"role": "user", "content": _build_facts_text(asset_name, snap, news)}],
         )
         import json
         text = next((b.text for b in resp.content if b.type == "text"), "")
@@ -70,7 +72,7 @@ def _claude_analyze(asset_name: str, snap: Snapshot, api_key: str, model: str):
         return None
 
 
-def _build_facts_text(asset_name: str, snap: Snapshot) -> str:
+def _build_facts_text(asset_name: str, snap: Snapshot, news: list[str] | None = None) -> str:
     lines = [
         f"品种：{asset_name}",
         f"最新价：{snap.price_fmt}",
@@ -86,12 +88,17 @@ def _build_facts_text(asset_name: str, snap: Snapshot) -> str:
             lines.append(f"  - {ind.name}：{ind.value}（{ind.badge_text}）")
     for k, v in snap.ai_facts.items():
         lines.append(f"{k}：{v}")
+    if news:
+        lines.append("近期相关新闻头条（请结合消息面研判）：")
+        for h in news[:5]:
+            lines.append(f"  - {h}")
     lines.append("数据来源：" + ("实时行情" if snap.data_live else "示例/缓存数据"))
     return "\n".join(lines)
 
 
 # ── 规则引擎降级（无需任何 API）──────────────────────────────
-def _rule_based(asset_name: str, snap: Snapshot) -> tuple[str, str, str]:
+def _rule_based(asset_name: str, snap: Snapshot,
+                news: list[str] | None = None) -> tuple[str, str, str]:
     score = snap.score
 
     # 第一段：形势（直接复用仪表盘标签，保证与评分一致）
@@ -114,6 +121,8 @@ def _rule_based(asset_name: str, snap: Snapshot) -> tuple[str, str, str]:
         risks = "当前最值得关注的风险：" + "；".join(risk_items[:3]) + "。"
     else:
         risks = "当前主要指标未见明显偏空信号，但仍需警惕宏观与流动性层面的超预期变化。"
+    if news:
+        risks += f"（另有 {len(news)} 条相关新闻，规则引擎仅基于指标，消息面请结合上方新闻卡或开启 Claude 深度分析。）"
 
     # 第三段：建议
     if score >= 60:

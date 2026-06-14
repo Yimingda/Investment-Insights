@@ -18,6 +18,7 @@ class ForexModule(AssetModule):
     accent = "#10b981"
     price_prefix = ""
     price_decimals = 4
+    scan_ticker = "CNY=X"
 
     def build_snapshot(self, refresh: bool = False) -> Snapshot:
         closes, dates, live = self.series_or_sim("CNY=X", ANCHORS, period="1y", refresh=refresh)
