@@ -41,7 +41,7 @@ def _install_stubs():
 
 def main():
     _install_stubs()
-    from lib import data, ai, indicators, events, news, alerts, usage
+    from lib import data, ai, indicators, events, news, alerts, usage, stocks
     from lib.model import Snapshot
 
     # 强制离线：所有外部数据源返回 None → 走降级路径
@@ -87,7 +87,13 @@ def main():
     assert usage.is_admin_key("sk-ant-admin01-xyz") and not usage.is_admin_key("sk-ant-api-xyz")
     samp = usage.sample_report(30)
     assert samp["daily"] and samp["by_label"] and samp["total"] > 0
-    print(f"  ✓ news / alerts / usage 接口降级正常（扫描预警 {len(scanned)} 条）")
+    # A股个股：代码→ticker 解析 + 离线 analyze 降级
+    assert stocks.to_ticker("600519") == "600519.SS"
+    assert stocks.to_ticker("000858") == "000858.SZ"
+    assert stocks.to_ticker("300750") == "300750.SZ"
+    assert stocks.parse_entries("600519 贵州茅台, 300750") == [("600519", "贵州茅台"), ("300750", "")]
+    assert stocks.analyze("600519")["ok"] is False  # 离线无数据 → 降级
+    print(f"  ✓ news / alerts / usage / stocks 接口降级正常（扫描预警 {len(scanned)} 条）")
 
     print(f"OK: {len(REGISTRY)} 个品种全部通过离线冒烟测试")
 

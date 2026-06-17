@@ -7,8 +7,9 @@
 import streamlit as st
 from datetime import datetime, date
 
-from lib import data, ai, events, news, alerts, usage
+from lib import data, ai, events, news, alerts, usage, stocks
 from lib.theme import CSS, make_gauge, make_price_chart, make_bar, make_hbar
+from lib.model import score_label
 from assets import REGISTRY, get_module
 
 # ── Page config ─────────────────────────────────────────────
@@ -101,6 +102,47 @@ def render_cost_page():
     数据来自 Anthropic Cost Admin API（约 5 分钟延迟）· 金额为美元</div>""", unsafe_allow_html=True)
 
 
+def render_stock_watchlist():
+    """A股自选股：输入代码 → 实时评分 + 建议（仅 A股页面显示）。"""
+    st.markdown("### 🔎 A股自选股")
+    raw = st.text_input(
+        "输入 A股代码（空格/逗号分隔，可带名称）",
+        key="ashare_watch", placeholder="例：600519 贵州茅台, 300750 宁德时代, 000858",
+        label_visibility="collapsed")
+    if not raw.strip():
+        st.caption("输入代码后回车，逐只显示实时评分与建议。沪市 6 开头→.SS，深市 0/3 开头→.SZ，自动识别。")
+        return
+    entries = stocks.parse_entries(raw)[:9]
+    cols = st.columns(min(3, len(entries)) or 1)
+    for i, (code, name) in enumerate(entries):
+        r = stocks.analyze(code, name)
+        with cols[i % len(cols)]:
+            if not r["ok"]:
+                st.markdown(f'<div class="card"><b>{r["name"]}</b> '
+                            f'<span style="color:#5a6070;font-size:11px">{r["ticker"]}</span><br>'
+                            f'<span style="color:#e05555;font-size:12px">未取到数据，请核对代码</span></div>',
+                            unsafe_allow_html=True)
+                continue
+            lab, col = score_label(r["score"])
+            up = r["chg"] >= 0
+            cc = "#3dba6a" if up else "#e05555"
+            macd_txt = ("金叉" if (r["macd_hist"] or 0) > 0 else "死叉") if r["macd_hist"] is not None else "—"
+            st.markdown(
+                f'<div class="card">'
+                f'<div style="display:flex;justify-content:space-between;align-items:baseline">'
+                f'<b style="font-size:14px">{r["name"]}</b>'
+                f'<span style="color:#5a6070;font-size:11px">{r["ticker"]}</span></div>'
+                f'<div style="font-family:monospace;font-size:20px;margin:4px 0">¥{r["price"]:,.2f} '
+                f'<span style="font-size:12px;color:{cc}">{"+" if up else ""}{r["chg_pct"]:.2f}%</span></div>'
+                f'<div style="font-size:12px;color:{col};font-weight:600">综合评分 {r["score"]}/100 · {lab}</div>'
+                f'<div style="font-size:11px;color:#5a6070;margin:6px 0">'
+                f'MA20/60 {"多头" if r["bullish_ma"] else "空头"} · RSI {r["rsi"]:.0f} · '
+                f'20日 {r["mom20"]:+.1f}% · MACD {macd_txt}</div>'
+                f'<div style="font-size:12px;color:#e4e6ee;line-height:1.55">💡 {r["advice"]}</div>'
+                f'</div>', unsafe_allow_html=True)
+    st.caption("评分基于实时技术面（趋势 / RSI / 动量 / MACD）。⚠️ 个股波动大，仅供参考，不构成投资建议。")
+
+
 # ── 顶部：品种切换 + 状态 ────────────────────────────────────
 ids = [m.id for m in REGISTRY] + ["__cost__"]
 labels = {m.id: f"{m.icon} {m.name}" for m in REGISTRY}
@@ -170,6 +212,11 @@ for c, kpi in zip(cols, snap.kpis):
 # ── Alerts ──────────────────────────────────────────────────
 for al in snap.alerts:
     st.markdown(f'<div class="{al.cls}">{al.text}</div>', unsafe_allow_html=True)
+
+# ── A股自选股（仅 A股页面）──────────────────────────────────
+if asset_id == "a_share":
+    render_stock_watchlist()
+    st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
 
 # ── Row 1: Chart + Gauge ────────────────────────────────────
 ch_col, ga_col = st.columns([3, 2])
