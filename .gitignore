@@ -1,6 +1,11 @@
 # Secrets - 绝对不要提交到 GitHub
 .streamlit/secrets.toml
 
+# 人物雷达本地状态（花费账本 / 数据快照 / 追踪名单）
+radar/.spend_ledger.json
+radar/.data_snapshot.json
+radar/.roster.json
+
 # Python
 __pycache__/
 *.py[cod]

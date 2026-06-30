@@ -11,6 +11,7 @@ from lib import data, ai, events, news, alerts, usage, stocks
 from lib.theme import CSS, make_gauge, make_price_chart, make_bar, make_hbar
 from lib.model import score_label
 from assets import REGISTRY, get_module
+from radar import page as radar_page
 
 # ── Page config ─────────────────────────────────────────────
 st.set_page_config(
@@ -144,8 +145,9 @@ def render_stock_watchlist():
 
 
 # ── 顶部：品种切换 + 状态 ────────────────────────────────────
-ids = [m.id for m in REGISTRY] + ["__cost__"]
+ids = [m.id for m in REGISTRY] + ["__radar__", "__cost__"]
 labels = {m.id: f"{m.icon} {m.name}" for m in REGISTRY}
+labels["__radar__"] = "📡 人物雷达"
 labels["__cost__"] = "💰 API花费"
 
 top_l, top_r = st.columns([4, 1])
@@ -163,7 +165,10 @@ if refresh:
     st.cache_data.clear()
     st.session_state["_do_refresh"] = True
 
-# 花费监控是独立视图（非品种），单独渲染后结束
+# 人物雷达 / 花费监控是独立视图（非品种），单独渲染后结束
+if asset_id == "__radar__":
+    radar_page.render()
+    st.stop()
 if asset_id == "__cost__":
     render_cost_page()
     st.stop()
