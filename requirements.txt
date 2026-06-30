@@ -1,6 +1,7 @@
 streamlit>=1.35.0
 plotly>=5.20.0
 pandas>=2.0.0
+numpy>=1.24.0          # 宏观四象限的因果 z-score / 动量计算
 requests>=2.31.0
 # 实时行情：股票/ETF/外汇/加密/期货/指数（含 A股指数 000300.SS 等）
 yfinance>=0.2.40

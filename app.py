@@ -12,6 +12,7 @@ from lib.theme import CSS, make_gauge, make_price_chart, make_bar, make_hbar
 from lib.model import score_label
 from assets import REGISTRY, get_module
 from radar import page as radar_page
+from macro import page as macro_page
 
 # ── Page config ─────────────────────────────────────────────
 st.set_page_config(
@@ -145,8 +146,9 @@ def render_stock_watchlist():
 
 
 # ── 顶部：品种切换 + 状态 ────────────────────────────────────
-ids = [m.id for m in REGISTRY] + ["__radar__", "__cost__"]
+ids = [m.id for m in REGISTRY] + ["__macro__", "__radar__", "__cost__"]
 labels = {m.id: f"{m.icon} {m.name}" for m in REGISTRY}
+labels["__macro__"] = "🌦️ 宏观四象限"
 labels["__radar__"] = "📡 人物雷达"
 labels["__cost__"] = "💰 API花费"
 
@@ -165,7 +167,10 @@ if refresh:
     st.cache_data.clear()
     st.session_state["_do_refresh"] = True
 
-# 人物雷达 / 花费监控是独立视图（非品种），单独渲染后结束
+# 宏观四象限 / 人物雷达 / 花费监控是独立视图（非品种），单独渲染后结束
+if asset_id == "__macro__":
+    macro_page.render()
+    st.stop()
 if asset_id == "__radar__":
     radar_page.render()
     st.stop()
