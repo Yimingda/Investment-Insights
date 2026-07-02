@@ -6,6 +6,9 @@ radar/.spend_ledger.json
 radar/.data_snapshot.json
 radar/.roster.json
 
+# 持仓监控（成本价/股数，属个人财务数据）
+.holdings.json
+
 # Python
 __pycache__/
 *.py[cod]

@@ -61,6 +61,9 @@ def yf_history(ticker: str, period: str = "3mo", interval: str = "1d"):
         df = yf.Ticker(ticker).history(period=period, interval=interval)
         if df is None or df.empty:
             return None
+        df = df[df["Close"].notna()]          # 去掉尾部 NaN（当日未收盘/停牌行），否则末值为 nan
+        if df.empty:
+            return None
         closes = [float(x) for x in df["Close"].tolist()]
         dates = [d.strftime("%m/%d") for d in df.index]
         return closes, dates

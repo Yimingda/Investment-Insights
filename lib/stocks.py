@@ -70,6 +70,8 @@ def analyze(code: str, name: str = "") -> dict:
         "macd_hist": (macd[2] if macd else None),
         "bullish_ma": bool(ma20 and ma60 and ma20 > ma60),
         "score": score, "advice": _advice(score, price, ma60, rsi, display),
+        "closes": closes[-120:], "dates": res[1][-120:],   # 供持仓监控画图
+        "drawdown": indicators.drawdown_from_high(closes[-120:]),
     }
 
 

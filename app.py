@@ -4,8 +4,11 @@
 数据：yfinance / FRED / akshare（缺失则降级示例数据）。
 分析：有 ANTHROPIC_API_KEY 用 Claude，否则用规则引擎。
 """
+import html as _html
 import streamlit as st
 from datetime import datetime, date
+
+esc = _html.escape   # HTML 转义（持仓监控等富文本卡片用）
 
 from lib import data, ai, events, news, alerts, usage, stocks
 from lib.theme import CSS, make_gauge, make_price_chart, make_bar, make_hbar
@@ -148,9 +151,161 @@ def render_stock_watchlist():
     st.caption("评分基于实时技术面（趋势 / RSI / 动量 / MACD）。⚠️ 个股波动大，仅供参考，不构成投资建议。")
 
 
+@st.cache_data(ttl=1800, show_spinner=False)
+def _stock_news(name: str) -> list[dict]:
+    """个股新闻（复用雷达的免费 Google News RSS，按中文名检索）。"""
+    try:
+        from radar import data as rd
+        return rd.fetch_news(name)[:3]
+    except Exception:
+        return []
+
+
+def _holding_panel(r: dict):
+    """单只持仓监控面板。返回 (市值, 成本额, 盈亏额) 供组合汇总；取数失败返回 None。"""
+    from lib import portfolio as pf
+    a = stocks.analyze(r["code"], r["name"])
+    if not a["ok"]:
+        st.markdown(f'<div class="card"><b>{r["name"]}</b> '
+                    f'<span style="color:#5a6070;font-size:11px">{r["code"]}</span><br>'
+                    f'<span style="color:#e05555;font-size:12px">未取到数据，请核对代码</span></div>',
+                    unsafe_allow_html=True)
+        return None
+    price, cost, shares = a["price"], r.get("cost", 0), r.get("shares", 0)
+    up = a["chg"] >= 0
+    cc = "#3dba6a" if up else "#e05555"
+    pl = pf.pnl(price, cost, shares)
+    lab, lcol, ltext = pf.verdict(a, cost)
+
+    # 顶部：名称 / 代码 / 现价 / 涨跌
+    st.markdown(
+        f'<div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:2px">'
+        f'<span style="font-size:16px;font-weight:700">{a["name"]} '
+        f'<span style="color:#5a6070;font-size:11px">{a["ticker"]}</span></span>'
+        f'<span style="font-family:monospace;font-size:19px">¥{price:,.2f} '
+        f'<span style="font-size:12px;color:{cc}">{"+" if up else ""}{a["chg_pct"]:.2f}%</span></span>'
+        f'</div>', unsafe_allow_html=True)
+
+    # 盈亏 / 回本
+    if pl["has_cost"]:
+        pc = "#3dba6a" if pl["pnl_amt"] >= 0 else "#e05555"
+        be = (f'已回本' if pl["to_breakeven"] <= 0 else f'回本还需 <b>+{pl["to_breakeven"]:.1f}%</b>')
+        sh = f'{pl["shares"]:.0f}股' if pl["shares"] else '未填股数'
+        st.markdown(
+            f'<div style="font-size:12.5px;margin:2px 0 4px">'
+            f'成本 ¥{cost:,.2f} · {sh} · '
+            f'盈亏 <b style="color:{pc}">{pl["pnl_amt"]:+,.0f}（{pl["pnl_pct"]:+.2f}%）</b> · {be}</div>',
+            unsafe_allow_html=True)
+    else:
+        st.caption("未填成本 —— 顶部「编辑持仓」填成本价/股数即可显示盈亏与回本价。")
+
+    # 走势图（叠加成本线）
+    try:
+        fig = theme.make_price_chart(
+            a["closes"], a["dates"], price, accent=lcol,
+            ma_ref=(cost if cost and cost > 0 else a["ma60"]),
+            ma_label=("成本" if cost and cost > 0 else "MA60"), price_prefix="¥")
+        st.plotly_chart(fig, width="stretch", key=f"hchart_{r['code']}")
+    except Exception:
+        pass
+
+    # 技术反转信号
+    macd_txt = ("金叉↑" if (a["macd_hist"] or 0) > 0 else "死叉↓") if a["macd_hist"] is not None else "—"
+    rsi_txt = ("超卖<30" if a["rsi"] < 30 else ("超买>70" if a["rsi"] > 70 else "中性"))
+    st.markdown(
+        f'<div style="font-size:11.5px;color:#9aa0b0;margin:2px 0 4px">'
+        f'📐 技术：均线 {"多头" if a["bullish_ma"] else "空头"}排列 · 价{"上" if price>=a["ma60"] else "下"}穿60日线 · '
+        f'RSI {a["rsi"]:.0f}({rsi_txt}) · MACD {macd_txt} · 距高点 {a["drawdown"]:.0f}% · '
+        f'评分 {a["score"]}/100</div>', unsafe_allow_html=True)
+
+    # 关键上涨影响因子
+    cat = pf.CATALYSTS.get(r["code"])
+    if cat:
+        st.markdown(
+            f'<div style="background:#3dba6a10;border-left:3px solid #3dba6a99;border-radius:6px;'
+            f'padding:7px 10px;font-size:11.5px;line-height:1.55;margin:2px 0 4px">'
+            f'<b style="color:#4ec27a">🚀 关键上涨因子</b><br>{esc(cat)}</div>',
+            unsafe_allow_html=True)
+
+    # 我的建议
+    st.markdown(
+        f'<div style="background:{lcol}14;border-left:3px solid {lcol};border-radius:6px;'
+        f'padding:7px 10px;font-size:12px;line-height:1.55;margin:2px 0 4px">'
+        f'<b style="color:{lcol}">💡 建议 · {lab}</b><br>{esc(ltext)}</div>',
+        unsafe_allow_html=True)
+
+    # 个股新闻
+    news = _stock_news(a["name"])
+    if news:
+        rows_html = "".join(
+            f'<div style="font-size:11px;padding:3px 0;border-top:1px solid #1e2130">'
+            f'<a href="{esc(n["url"])}" target="_blank" style="color:#c8ccd8;text-decoration:none">'
+            f'{esc(n["title"])}</a></div>' for n in news)
+        st.markdown(f'<div style="margin:2px 0 6px"><span style="font-size:10px;color:#5a6070;'
+                    f'text-transform:uppercase">📰 个股新闻</span>{rows_html}</div>',
+                    unsafe_allow_html=True)
+    st.divider()
+    return (pl.get("market_value", 0.0), pl.get("cost_value", 0.0), pl.get("pnl_amt", 0.0))
+
+
+def render_holdings_monitor():
+    """📉 持仓监控盘：一股一盘（盈亏/回本 + 技术信号 + 关键因子 + 新闻 + 建议）。"""
+    import pandas as pd
+    from lib import portfolio as pf
+
+    st.markdown("## 📉 持仓监控盘")
+    st.caption("每只单独一盘：实时价 · 盈亏/回本 · 技术反转信号 · 关键上涨因子 · 个股新闻 · 我的建议。"
+               "⚠️ 仅供参考，不构成投资建议。")
+
+    rows = pf.load_holdings()
+    need_cost = any((r.get("cost", 0) or 0) <= 0 for r in rows)
+    with st.expander("✏️ 编辑持仓（成本价 / 股数）", expanded=need_cost):
+        edited = st.data_editor(
+            pd.DataFrame(rows, columns=["code", "name", "cost", "shares"]),
+            column_config={
+                "code": st.column_config.TextColumn("代码", width="small"),
+                "name": st.column_config.TextColumn("名称", width="small"),
+                "cost": st.column_config.NumberColumn("成本价(¥)", min_value=0.0, step=0.01, format="%.2f"),
+                "shares": st.column_config.NumberColumn("股数", min_value=0.0, step=100.0, format="%.0f"),
+            },
+            num_rows="dynamic", hide_index=True, width="stretch", key="holdings_editor")
+        a, b = st.columns([1, 4])
+        if a.button("💾 保存持仓", type="primary", width="stretch"):
+            pf.save_holdings(edited.to_dict("records"))
+            st.success("已保存。")
+            st.rerun()
+        b.caption("改成本价/股数；也可加行(填代码+名称)或删行。保存后按新持仓刷新。")
+
+    if st.button("⟳ 刷新行情", width="stretch"):
+        st.cache_data.clear()
+        st.rerun()
+
+    rows = pf.load_holdings()
+    with st.spinner("加载持仓行情中…（首次约 10–20 秒）"):
+        tot = [0.0, 0.0, 0.0]   # 市值 / 成本额 / 盈亏额
+        cols = st.columns(2)
+        for i, r in enumerate(rows):
+            with cols[i % 2]:
+                res = _holding_panel(r)
+                if res:
+                    for k in range(3):
+                        tot[k] += res[k]
+
+    if tot[1] > 0:   # 有填成本的组合汇总
+        pnl_pct = (tot[2] / tot[1] * 100) if tot[1] else 0.0
+        pc = "#3dba6a" if tot[2] >= 0 else "#e05555"
+        st.markdown(
+            f'<div class="card" style="text-align:center">'
+            f'<span style="font-size:12px;color:#5a6070">组合合计（已填成本部分）</span><br>'
+            f'市值 ¥{tot[0]:,.0f} · 成本 ¥{tot[1]:,.0f} · '
+            f'<b style="color:{pc};font-size:15px">盈亏 {tot[2]:+,.0f}（{pnl_pct:+.2f}%）</b></div>',
+            unsafe_allow_html=True)
+
+
 # ── 顶部：品种切换 + 状态 ────────────────────────────────────
-ids = [m.id for m in REGISTRY] + ["__macro__", "__extremes__", "__rrg__", "__gem__", "__radar__", "__cost__"]
+ids = [m.id for m in REGISTRY] + ["__holdings__", "__macro__", "__extremes__", "__rrg__", "__gem__", "__radar__", "__cost__"]
 labels = {m.id: f"{m.icon} {m.name}" for m in REGISTRY}
+labels["__holdings__"] = "📉 持仓监控"
 labels["__macro__"] = "🌦️ 宏观四象限"
 labels["__extremes__"] = "🎯 极值追踪"
 labels["__rrg__"] = "🔄 板块轮动 RRG"
@@ -173,7 +328,10 @@ if refresh:
     st.cache_data.clear()
     st.session_state["_do_refresh"] = True
 
-# 宏观四象限 / 人物雷达 / 花费监控是独立视图（非品种），单独渲染后结束
+# 持仓监控 / 宏观四象限 / 人物雷达 / 花费监控是独立视图（非品种），单独渲染后结束
+if asset_id == "__holdings__":
+    render_holdings_monitor()
+    st.stop()
 if asset_id == "__macro__":
     macro_page.render()
     st.stop()
