@@ -251,6 +251,7 @@ def _holding_panel(r: dict):
 
 def render_holdings_monitor():
     """📉 持仓监控盘：一股一盘（盈亏/回本 + 技术信号 + 关键因子 + 新闻 + 建议）。"""
+    import json as _json
     import pandas as pd
     from lib import portfolio as pf
 
@@ -258,7 +259,15 @@ def render_holdings_monitor():
     st.caption("每只单独一盘：实时价 · 盈亏/回本 · 技术反转信号 · 关键上涨因子 · 个股新闻 · 我的建议。"
                "⚠️ 仅供参考，不构成投资建议。")
 
-    rows = pf.load_holdings()
+    # 持仓以本次会话(st.session_state)为准 —— 云端各访客互不可见、不写共享磁盘；本地额外落盘持久化
+    if "holdings" not in st.session_state:
+        st.session_state["holdings"] = pf.load_holdings()
+    rows = st.session_state["holdings"]
+
+    if pf.IS_CLOUD:
+        st.info("☁️ 云端模式：你填的成本价仅保存在**本次浏览器会话**（他人看不到、刷新/休眠后清空）。"
+                "想长期保留，用下方「导出」存成文件，下次「导入」即可。")
+
     need_cost = any((r.get("cost", 0) or 0) <= 0 for r in rows)
     with st.expander("✏️ 编辑持仓（成本价 / 股数）", expanded=need_cost):
         edited = st.data_editor(
@@ -272,16 +281,37 @@ def render_holdings_monitor():
             num_rows="dynamic", hide_index=True, width="stretch", key="holdings_editor")
         a, b = st.columns([1, 4])
         if a.button("💾 保存持仓", type="primary", width="stretch"):
-            pf.save_holdings(edited.to_dict("records"))
+            recs = edited.to_dict("records")
+            st.session_state["holdings"] = recs
+            pf.save_holdings(recs)            # 本地写文件；云端为空操作
             st.success("已保存。")
             st.rerun()
         b.caption("改成本价/股数；也可加行(填代码+名称)或删行。保存后按新持仓刷新。")
+
+        # 导出 / 导入（云端持久化备份，也可跨设备迁移）
+        e, f = st.columns(2)
+        e.download_button("⬇️ 导出持仓 JSON", data=_json.dumps(rows, ensure_ascii=False),
+                          file_name="holdings.json", mime="application/json", width="stretch")
+        up = f.file_uploader("⬆️ 导入持仓 JSON", type="json", key="hold_up", label_visibility="collapsed")
+        if up is not None:
+            sig = f"{up.name}:{up.size}"
+            if st.session_state.get("_hold_up_sig") != sig:
+                try:
+                    data = _json.loads(up.getvalue().decode("utf-8"))
+                    assert isinstance(data, list)
+                    st.session_state["holdings"] = data
+                    st.session_state["_hold_up_sig"] = sig
+                    pf.save_holdings(data)
+                    st.success("已导入。")
+                    st.rerun()
+                except Exception:
+                    st.error("导入失败：请用本页导出的 JSON 格式。")
 
     if st.button("⟳ 刷新行情", width="stretch"):
         st.cache_data.clear()
         st.rerun()
 
-    rows = pf.load_holdings()
+    rows = st.session_state["holdings"]
     with st.spinner("加载持仓行情中…（首次约 10–20 秒）"):
         tot = [0.0, 0.0, 0.0]   # 市值 / 成本额 / 盈亏额
         cols = st.columns(2)

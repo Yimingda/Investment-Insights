@@ -12,6 +12,10 @@ import os
 _PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                      ".holdings.json")
 
+# 云端(Streamlit Cloud)标志：文件系统临时且跨访客共用，故云端不落盘，
+# 持仓只放各自的 st.session_state，避免把成本价泄露给其他访客/互相串档。
+IS_CLOUD = os.path.isdir("/mount/src") or os.environ.get("HOME", "").startswith("/home/appuser")
+
 # 默认持仓（用户此前给的 12 只；成本价/股数默认 0，进页面自行填写）
 DEFAULT_HOLDINGS = [
     ("002352", "顺丰控股"), ("600036", "招商银行"), ("600050", "中国联通"),
@@ -37,8 +41,14 @@ CATALYSTS = {
 }
 
 
+def default_holdings() -> list[dict]:
+    return [{"code": c, "name": n, "cost": 0.0, "shares": 0.0} for c, n in DEFAULT_HOLDINGS]
+
+
 def load_holdings() -> list[dict]:
-    """返回持仓行 [{code,name,cost,shares}]；无文件→默认 12 只、成本/股数为 0。"""
+    """返回持仓行 [{code,name,cost,shares}]；云端或无文件→默认 12 只、成本/股数为 0。"""
+    if IS_CLOUD:                       # 云端不读共享磁盘，交给 session_state
+        return default_holdings()
     try:
         with open(_PATH, encoding="utf-8") as f:
             rows = json.load(f)
@@ -51,10 +61,12 @@ def load_holdings() -> list[dict]:
             return out
     except Exception:
         pass
-    return [{"code": c, "name": n, "cost": 0.0, "shares": 0.0} for c, n in DEFAULT_HOLDINGS]
+    return default_holdings()
 
 
 def save_holdings(rows: list[dict]) -> bool:
+    if IS_CLOUD:                       # 云端不落盘（避免跨访客泄露/串档）；由 session_state 保存
+        return False
     try:
         clean = [{"code": str(r["code"]).strip(), "name": r.get("name", ""),
                   "cost": float(r.get("cost") or 0), "shares": float(r.get("shares") or 0)}
