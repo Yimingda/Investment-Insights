@@ -100,6 +100,19 @@ ALLWEATHER = [
     {"sleeve": "黄金 (GC=F)",       "pct": 7.5,  "bias": "滞胀/贬值 Stagflation"},
 ]
 
+# ── 美林投资时钟叠加(同一 增长×通胀 平面,给每格补上"时钟相位 + 主角资产大类")──
+# 注意命名冲突:本页 "Reflation 再通胀"(增长↑通胀↑)= 美林的 "Overheat 过热";
+# 美林的 "Reflation" = 本页的 "Deflation"(增长↓通胀↓)。故不改格名,只叠加主角资产。
+MERRILL = {
+    "Goldilocks 金发女孩": {"phase": "Recovery 复苏",      "lead": "股票 SPY", "proxy": "SPY"},
+    "Reflation 再通胀":    {"phase": "Overheat 过热",      "lead": "商品 DBC", "proxy": "DBC"},
+    "Stagflation 滞胀":    {"phase": "Stagflation 滞胀",   "lead": "现金 SHY", "proxy": "SHY"},
+    "Deflation 通缩衰退":  {"phase": "Reflation 再通胀(美林)", "lead": "债券 IEF", "proxy": "IEF"},
+}
+MERRILL_PROXIES = {"股票 SPY": "SPY", "商品 DBC": "DBC", "现金 SHY": "SHY", "债券 IEF": "IEF"}
+# 顺时针经济循环:复苏→过热→滞胀→衰退→复苏(用于方向叙事)
+MERRILL_CYCLE = ["Goldilocks 金发女孩", "Reflation 再通胀", "Stagflation 滞胀", "Deflation 通缩衰退"]
+
 
 # ── 因果原语 ─────────────────────────────────────────────────────────────
 def causal_z(x: pd.Series, mode: str = "expanding") -> pd.Series:
@@ -227,4 +240,34 @@ def forward_return_study(axes_df: pd.DataFrame, tracked_px: pd.DataFrame,
                              "median": float(vals.median()) if n else np.nan,
                              "hit": float((vals > 0).mean()) if n else np.nan,
                              "low_n": eff < 5})
+    return pd.DataFrame(rows)
+
+
+def merrill_leader_study(axes_df: pd.DataFrame, px: pd.DataFrame,
+                         horizon: int | None = None) -> pd.DataFrame:
+    """每象限:四大类资产代理(SPY/DBC/SHY/IEF)的远期收益,检验美林指定的"主角"是否真跑赢。
+
+    px 须含 SPY/DBC/SHY/IEF(Dalio 那 10 个 ticker 里都有)。label 前移一位(无前视)。
+    """
+    H = horizon or HORIZONS[len(HORIZONS) // 2]
+    label = axes_df["quadrant"].shift(1).dropna()
+    rows = []
+    for q in QUADRANTS.values():
+        rec = {"quadrant": q, "phase": MERRILL[q]["phase"], "designated": MERRILL[q]["lead"]}
+        best_name, best_val = None, -1e18
+        for name, tk in MERRILL_PROXIES.items():
+            if tk not in px.columns:
+                rec[name] = np.nan
+                continue
+            p = px[tk].dropna()
+            fwd = (p.shift(-H) / p - 1.0).reindex(label.index).dropna()
+            lab = label.reindex(fwd.index)
+            v = fwd[lab == q]
+            mv = float(v.mean()) if len(v) else np.nan
+            rec[name] = mv
+            if mv == mv and mv > best_val:
+                best_val, best_name = mv, name
+        rec["actual_winner"] = best_name
+        rec["match"] = (best_name == rec["designated"])
+        rows.append(rec)
     return pd.DataFrame(rows)

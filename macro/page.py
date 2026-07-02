@@ -294,6 +294,46 @@ def render():
         unsafe_allow_html=True)
     _card_close()
 
+    # ── ⑨ 美林投资时钟叠加 ────────────────────────────────────────────
+    _card_open("⑨ 美林投资时钟叠加(同一平面 · 每格的主角资产)")
+    mc = Q.MERRILL[q_now]
+    st.markdown(
+        f'<div style="font-size:13px;color:#d4d7e0;line-height:1.7">'
+        f'美林时钟把这**同一个 增长×通胀 平面**看成一个**顺时针转的周期**:复苏→过热→滞胀→衰退。'
+        f'每一格有一个**主角资产大类**。当前 <b style="color:{QCOLOR[q_now]}">{q_now}</b> = '
+        f'时钟相位 <b>{mc["phase"]}</b> → 🎯 时钟主角:<b style="color:#e8a23d">{mc["lead"]}</b>。</div>',
+        unsafe_allow_html=True)
+    clock = pd.DataFrame([
+        {"象限(本页)": q, "时钟相位": Q.MERRILL[q]["phase"], "主角资产": Q.MERRILL[q]["lead"]}
+        for q in Q.MERRILL_CYCLE])
+    st.dataframe(clock, width="stretch", hide_index=True)
+    st.markdown(
+        '<div class="alert-warn" style="font-size:11.5px;line-height:1.6">'
+        '⚠️ <b>命名冲突提醒:</b>本页的 “Reflation 再通胀”(增长↑通胀↑)= 美林的 <b>Overheat 过热</b>;'
+        '而美林的 “Reflation” 指增长↓通胀↓,即本页的 <b>Deflation</b>(主角债券)。故此处只叠加主角资产、不改本页格名。'
+        '</div>', unsafe_allow_html=True)
+
+    # 实证:美林指定的"主角"真的在该格跑赢吗?(复用四大类代理 SPY/DBC/SHY/IEF)
+    ms = Q.merrill_leader_study(axes, px)
+    fm = go.Figure()
+    proxy_names = list(Q.MERRILL_PROXIES.keys())
+    pcolor = {"股票 SPY": "#4d8fdb", "商品 DBC": "#e8a23d", "现金 SHY": "#5cc2c2", "债券 IEF": "#3dba6a"}
+    for name in proxy_names:
+        fm.add_trace(go.Bar(x=ms["quadrant"], y=(ms[name] * 100).values, name=name,
+                            marker_color=pcolor[name]))
+    fm.add_hline(y=0, line_color="#3a3e4a")
+    _dark(fm, height=320)
+    fm.update_layout(barmode="group")
+    fm.update_yaxes(title_text=f"未来 63 日平均收益 (%)")
+    st.plotly_chart(fm, width="stretch", config=_PLOT_CFG)
+    verdict = "; ".join(
+        f"{r['quadrant'].split()[0]}→时钟押{r['designated'].split()[0]}"
+        f"{'✅命中' if r['match'] else '❌实际是'+str(r['actual_winner']).split()[0]}"
+        for _, r in ms.iterrows())
+    st.caption(f"时钟处方 vs 实测(市场隐含象限,H=63):{verdict}。"
+               "命中说明时钟成立,不命中正是'市场隐含时钟 vs 教科书处方'的看点——描述性,非择时。")
+    _card_close()
+
     st.markdown(
         "<div style='text-align:center;font-size:10px;color:#3a3e4a;padding:10px'>"
         "增长/通胀轴为市场隐含的描述性指标 · 数据 yfinance 实时 · "

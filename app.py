@@ -15,6 +15,7 @@ from radar import page as radar_page
 from macro import page as macro_page
 from rrg import page as rrg_page
 from gem import page as gem_page
+from extremes import page as extremes_page
 
 # ── Page config ─────────────────────────────────────────────
 st.set_page_config(
@@ -148,9 +149,10 @@ def render_stock_watchlist():
 
 
 # ── 顶部：品种切换 + 状态 ────────────────────────────────────
-ids = [m.id for m in REGISTRY] + ["__macro__", "__rrg__", "__gem__", "__radar__", "__cost__"]
+ids = [m.id for m in REGISTRY] + ["__macro__", "__extremes__", "__rrg__", "__gem__", "__radar__", "__cost__"]
 labels = {m.id: f"{m.icon} {m.name}" for m in REGISTRY}
 labels["__macro__"] = "🌦️ 宏观四象限"
+labels["__extremes__"] = "🎯 极值追踪"
 labels["__rrg__"] = "🔄 板块轮动 RRG"
 labels["__gem__"] = "🚦 双动量 GEM"
 labels["__radar__"] = "📡 人物雷达"
@@ -174,6 +176,9 @@ if refresh:
 # 宏观四象限 / 人物雷达 / 花费监控是独立视图（非品种），单独渲染后结束
 if asset_id == "__macro__":
     macro_page.render()
+    st.stop()
+if asset_id == "__extremes__":
+    extremes_page.render()
     st.stop()
 if asset_id == "__rrg__":
     rrg_page.render()
