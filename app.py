@@ -31,6 +31,32 @@ st.set_page_config(
 st.markdown(CSS, unsafe_allow_html=True)
 
 
+# ── 访问密码门（仅当 secrets 里设了 APP_PASSWORD 才启用）────────
+def _check_auth():
+    import hmac
+    pw = data.secret("APP_PASSWORD")
+    if not pw or not str(pw).strip():      # 未配置 → 不设门（本地/忘配时不锁死）
+        return
+    if st.session_state.get("_authed"):
+        return
+    st.markdown("## 🔒 访问验证")
+    st.caption("本站需要密码访问。")
+    with st.form("_auth_form", clear_on_submit=False):
+        entered = st.text_input("密码", type="password", label_visibility="collapsed",
+                                placeholder="请输入访问密码")
+        ok = st.form_submit_button("进入", type="primary")
+    if ok:
+        if hmac.compare_digest(str(entered), str(pw)):
+            st.session_state["_authed"] = True
+            st.rerun()
+        else:
+            st.error("密码不正确，请重试。")
+    st.stop()
+
+
+_check_auth()
+
+
 # ── 工具 ─────────────────────────────────────────────────────
 def anthropic_key() -> str | None:
     k = data.secret("ANTHROPIC_API_KEY")
