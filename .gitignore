@@ -9,6 +9,11 @@ radar/.roster.json
 # 持仓监控（成本价/股数，属个人财务数据）
 .holdings.json
 
+# 个股深度情报（生成内容缓存 + 情报花费账本 + 解析诊断）
+.intel.json
+.intel_ledger.json
+.intel_debug_last.txt
+
 # Python
 __pycache__/
 *.py[cod]

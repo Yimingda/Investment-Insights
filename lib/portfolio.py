@@ -7,7 +7,17 @@
 from __future__ import annotations
 
 import json
+import math
 import os
+
+
+def _num(v) -> float:
+    """安全转 float：NaN/inf/非法值一律归 0（data_editor 空单元格会产生 NaN）。"""
+    try:
+        f = float(v)
+        return f if math.isfinite(f) else 0.0
+    except Exception:
+        return 0.0
 
 _PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                      ".holdings.json")
@@ -56,7 +66,7 @@ def load_holdings() -> list[dict]:
         for r in rows:
             if r.get("code"):
                 out.append({"code": str(r["code"]).strip(), "name": r.get("name", ""),
-                            "cost": float(r.get("cost") or 0), "shares": float(r.get("shares") or 0)})
+                            "cost": _num(r.get("cost")), "shares": _num(r.get("shares"))})
         if out:
             return out
     except Exception:
@@ -69,7 +79,7 @@ def save_holdings(rows: list[dict]) -> bool:
         return False
     try:
         clean = [{"code": str(r["code"]).strip(), "name": r.get("name", ""),
-                  "cost": float(r.get("cost") or 0), "shares": float(r.get("shares") or 0)}
+                  "cost": _num(r.get("cost")), "shares": _num(r.get("shares"))}
                  for r in rows if str(r.get("code", "")).strip()]
         with open(_PATH, "w", encoding="utf-8") as f:
             json.dump(clean, f, ensure_ascii=False)
@@ -79,7 +89,8 @@ def save_holdings(rows: list[dict]) -> bool:
 
 
 def pnl(price: float, cost: float, shares: float) -> dict:
-    """盈亏 / 回本。cost<=0 视为未填。"""
+    """盈亏 / 回本。cost<=0 视为未填（NaN 等非法值同样按未填处理）。"""
+    cost, shares = _num(cost), _num(shares)
     if not cost or cost <= 0:
         return {"has_cost": False}
     amt = (price - cost) * shares if shares else 0.0
@@ -93,6 +104,7 @@ def pnl(price: float, cost: float, shares: float) -> dict:
 
 def verdict(a: dict, cost: float = 0.0) -> tuple[str, str, str]:
     """结合技术面 + 套牢深度 → (级别标签, 颜色, 建议正文)。a 为 stocks.analyze() 结果。"""
+    cost = _num(cost)
     price, score, rsi = a["price"], a["score"], a["rsi"]
     below60 = price < a["ma60"]
     macd_up = (a.get("macd_hist") or 0) > 0

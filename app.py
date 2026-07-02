@@ -188,6 +188,167 @@ def _stock_news(name: str) -> list[dict]:
         return []
 
 
+def _intel_tabs(r: dict, a: dict):
+    """📋 深度情报：决策日历 / 最新财报 / 半年大事 / 行业政策（Claude 联网生成 + 存盘）。"""
+    from lib import intel
+    code, name = str(r["code"]), a["name"]
+    rec = intel.get_stock(code)
+    ind = intel.industry_of(code)
+    pol = intel.get_policy(ind)
+    key = anthropic_key()
+
+    top_a, top_b = st.columns([2.2, 1])
+    top_a.caption(f"个股情报更新：{intel.age_str(rec.get('generated_at') if rec else None)} · "
+                  f"今日情报花费 ${intel.spent_today():.2f}/${intel.budget_cap():.2f}")
+    if top_b.button(f"🔄 生成/更新（约${intel.EST_STOCK:.2f}）", key=f"gen_{code}",
+                    width="stretch", disabled=not key):
+        with st.spinner(f"联网检索 {name} 的财报/事件/日历中…（约 20–60 秒）"):
+            res = intel.gen_stock(code, name, key)
+        if res == "__BUDGET__":
+            st.warning(f"今日情报预算 ${intel.budget_cap():.2f} 已用尽（secrets 里 INTEL_BUDGET_USD 可调）。")
+        elif res == "__AUTH__":
+            st.error("ANTHROPIC_API_KEY 无效或已被吊销 —— 请检查 secrets 配置。")
+        elif res is None:
+            st.error("生成失败（网络/解析问题），请稍后重试。")
+        else:
+            st.rerun()
+    if not key:
+        st.caption("⚠️ 未配置 ANTHROPIC_API_KEY，无法联网生成；仅显示规则日历。")
+
+    t1, t2, t3, t4 = st.tabs(["📅 决策日历", "📑 最新财报", "🗓️ 半年大事", "🏛️ 行业政策"])
+
+    with t1:   # 规则窗口(免费兜底) + AI 精确事件
+        rows_c = intel.rule_calendar(code) + (rec.get("calendar", []) if rec else [])
+        h = ""
+        for c in rows_c:
+            when = c.get("when") or c.get("date") or ""
+            src = f' <span style="color:#5a6070;font-size:9px">[{c["src"]}]</span>' if c.get("src") else ""
+            h += (f'<div style="padding:5px 0;border-bottom:1px solid #1e2130;font-size:12px">'
+                  f'<b style="color:#7aa2f7">{esc(str(when))}</b> · {esc(str(c.get("event","")))}{src}'
+                  f'<div style="font-size:10.5px;color:#9aa0b0">{esc(str(c.get("why","")))}</div></div>')
+        st.markdown(h or '<div style="color:#5a6070;font-size:12px">暂无</div>', unsafe_allow_html=True)
+        if not rec:
+            st.caption("点上方「生成/更新」补充分红除权、解禁、股东大会等精确事件。")
+
+    with t2:   # 最新财报分析
+        er = (rec or {}).get("earnings")
+        if er:
+            v = str(er.get("verdict", ""))
+            vc = "#3dba6a" if v.startswith("利多") else ("#e05555" if v.startswith("利空") else "#e0a458")
+            hi = "".join(f'<li>{esc(str(x))}</li>' for x in (er.get("highlights") or [])[:4])
+            rk = "".join(f'<li>{esc(str(x))}</li>' for x in (er.get("risks") or [])[:3])
+            st.markdown(
+                f'<div style="font-size:12px;line-height:1.6">'
+                f'<b>{esc(str(er.get("period","最新财报")))}</b> · {esc(str(er.get("beat","")))}<br>'
+                f'{esc(str(er.get("summary","")))}'
+                f'<div style="margin-top:4px"><b style="color:#4ec27a">亮点</b><ul style="margin:2px 0 4px 18px">{hi}</ul>'
+                f'<b style="color:#e08030">风险</b><ul style="margin:2px 0 4px 18px">{rk}</ul></div>'
+                f'<div style="background:{vc}14;border-left:3px solid {vc};border-radius:5px;'
+                f'padding:5px 9px;margin-top:3px"><b style="color:{vc}">{esc(v)}</b></div></div>',
+                unsafe_allow_html=True)
+        else:
+            st.caption("尚未生成 —— 点上方「生成/更新」联网分析最新一期财报。")
+
+    with t3:   # 近半年大事时间线
+        evs = (rec or {}).get("events") or []
+        if evs:
+            h = ""
+            for e in evs:
+                imp = str(e.get("impact", "0"))
+                ic, dot = (("#3dba6a", "▲") if imp == "+" else
+                           (("#e05555", "▼") if imp == "-" else ("#9aa0b0", "•")))
+                h += (f'<div style="padding:4px 0;border-bottom:1px solid #1e2130;font-size:11.5px">'
+                      f'<span style="color:#5a6070">{esc(str(e.get("date","")))}</span> '
+                      f'<b style="color:{ic}">{dot}</b> {esc(str(e.get("event","")))}'
+                      f'<span style="color:#9aa0b0"> — {esc(str(e.get("note","")))}</span></div>')
+            st.markdown(h, unsafe_allow_html=True)
+        else:
+            st.caption("尚未生成 —— 点上方「生成/更新」汇总近半年公告/新闻/变动。")
+
+    with t4:   # 行业政策累计（同行业共享一份）
+        pa, pb = st.columns([2.2, 1])
+        pa.caption(f"行业：**{ind}** · 政策更新：{intel.age_str(pol.get('generated_at') if pol else None)}")
+        if pb.button(f"🔄 更新政策（约${intel.EST_POLICY:.2f}）", key=f"genp_{code}",
+                     width="stretch", disabled=not key):
+            with st.spinner(f"联网检索「{ind}」行业政策中…"):
+                res = intel.gen_policy(ind, key)
+            if res == "__BUDGET__":
+                st.warning("今日情报预算已用尽。")
+            elif res == "__AUTH__":
+                st.error("ANTHROPIC_API_KEY 无效或已被吊销 —— 请检查 secrets 配置。")
+            elif res is None:
+                st.error("生成失败，请稍后重试。")
+            else:
+                st.rerun()
+        items = (pol or {}).get("items") or []
+        if items:
+            h = ""
+            for p in items:
+                dr = str(p.get("direction", "中性"))
+                dc = "#3dba6a" if dr == "利多" else ("#e05555" if dr == "利空" else "#9aa0b0")
+                h += (f'<div style="padding:4px 0;border-bottom:1px solid #1e2130;font-size:11.5px">'
+                      f'<span style="color:#5a6070">{esc(str(p.get("date","")))}</span> '
+                      f'<b style="color:{dc}">[{esc(dr)}]</b> {esc(str(p.get("policy","")))}'
+                      f'<div style="font-size:10.5px;color:#9aa0b0">{esc(str(p.get("impact","")))}</div></div>')
+            st.markdown(h, unsafe_allow_html=True)
+        else:
+            st.caption(f"尚未生成 —— 点「更新政策」汇总近 12 个月「{ind}」行业政策（同行业股票共享）。")
+
+
+def _render_dashboard(rows: list[dict], analyses: dict):
+    """持仓仪表盘：组合盈亏总览 + 每只状态灯矩阵 + 未来14天事件聚合。"""
+    from lib import portfolio as pf
+    from lib import intel
+
+    tot_mv = tot_cv = tot_pnl = today_amt = 0.0
+    chips = ""
+    for r in rows:
+        a = analyses.get(str(r["code"]))
+        nm = (r.get("name") or r["code"])
+        if not a or not a.get("ok"):
+            chips += (f'<span style="display:inline-flex;align-items:center;gap:5px;background:#111318;'
+                      f'border:1px solid #1e2130;border-radius:14px;padding:3px 10px;font-size:11px;'
+                      f'color:#5a6070">● {esc(str(nm))} 无数据</span>')
+            continue
+        lab, lcol, _ = pf.verdict(a, r.get("cost", 0) or 0)
+        pl = pf.pnl(a["price"], r.get("cost", 0) or 0, r.get("shares", 0) or 0)
+        if pl["has_cost"]:
+            tot_mv += pl["market_value"]; tot_cv += pl["cost_value"]; tot_pnl += pl["pnl_amt"]
+            today_amt += a["chg"] * (pl["shares"] or 0)
+            sub, subc = f'{pl["pnl_pct"]:+.1f}%', ("#3dba6a" if pl["pnl_pct"] >= 0 else "#e05555")
+        else:
+            sub, subc = f'{a["chg_pct"]:+.1f}%', ("#3dba6a" if a["chg_pct"] >= 0 else "#e05555")
+        chips += (f'<span title="{esc(lab)}" style="display:inline-flex;align-items:center;gap:5px;'
+                  f'background:#111318;border:1px solid #1e2130;border-radius:14px;padding:3px 10px;'
+                  f'font-size:11px;color:#c8ccd8"><span style="color:{lcol}">●</span>'
+                  f'{esc(str(nm))} <b style="color:{subc}">{sub}</b></span>')
+
+    if tot_cv > 0:
+        pnl_pct = tot_pnl / tot_cv * 100
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("总市值", f"¥{tot_mv:,.0f}")
+        m2.metric("总成本", f"¥{tot_cv:,.0f}")
+        m3.metric("总盈亏", f"¥{tot_pnl:+,.0f}", f"{pnl_pct:+.2f}%")
+        m4.metric("今日波动", f"¥{today_amt:+,.0f}",
+                  f"{(today_amt / tot_mv * 100) if tot_mv else 0:+.2f}%")
+    st.markdown(f'<div style="display:flex;flex-wrap:wrap;gap:6px;margin:4px 0 6px">{chips}</div>',
+                unsafe_allow_html=True)
+
+    ev = intel.upcoming_events([(str(r["code"]), r.get("name") or r["code"]) for r in rows], 14)
+    if ev:
+        h = '<div style="font-size:10px;color:#5a6070;text-transform:uppercase;margin-top:2px">📅 未来 14 天关键事件</div>'
+        for e in ev[:8]:
+            h += (f'<div style="font-size:11.5px;padding:3px 0;border-bottom:1px solid #1e2130">'
+                  f'<b style="color:#e0a458">{e["date"][5:]}</b>'
+                  f'<span style="color:#5a6070">（{e["days"]}天后）</span> '
+                  f'<b>{esc(e["name"])}</b> · {esc(e["event"])}'
+                  f'<span style="color:#9aa0b0"> — {esc(e["why"])}</span></div>')
+        st.markdown(h, unsafe_allow_html=True)
+    else:
+        st.caption("📅 未来 14 天暂无已知关键事件（生成个股情报后，分红/解禁等会汇入这里）。")
+    st.divider()
+
+
 def _holding_panel(r: dict):
     """单只持仓监控面板。返回 (市值, 成本额, 盈亏额) 供组合汇总；取数失败返回 None。"""
     from lib import portfolio as pf
@@ -226,15 +387,15 @@ def _holding_panel(r: dict):
     else:
         st.caption("未填成本 —— 顶部「编辑持仓」填成本价/股数即可显示盈亏与回本价。")
 
-    # 走势图（叠加成本线）
+    # 走势图（叠加成本线）。注：曾写成 theme.make_price_chart（未绑定名）被裸 except 吞掉，图从未显示
     try:
-        fig = theme.make_price_chart(
+        fig = make_price_chart(
             a["closes"], a["dates"], price, accent=lcol,
             ma_ref=(cost if cost and cost > 0 else a["ma60"]),
             ma_label=("成本" if cost and cost > 0 else "MA60"), price_prefix="¥")
         st.plotly_chart(fig, width="stretch", key=f"hchart_{r['code']}")
-    except Exception:
-        pass
+    except Exception as _chart_err:
+        st.caption(f"（走势图暂不可用：{type(_chart_err).__name__}）")
 
     # 技术反转信号
     macd_txt = ("金叉↑" if (a["macd_hist"] or 0) > 0 else "死叉↓") if a["macd_hist"] is not None else "—"
@@ -271,6 +432,11 @@ def _holding_panel(r: dict):
         st.markdown(f'<div style="margin:2px 0 6px"><span style="font-size:10px;color:#5a6070;'
                     f'text-transform:uppercase">📰 个股新闻</span>{rows_html}</div>',
                     unsafe_allow_html=True)
+
+    # 深度情报（日历 / 财报 / 半年大事 / 行业政策）
+    with st.expander("📋 深度情报：📅日历 · 📑财报 · 🗓️半年大事 · 🏛️政策"):
+        _intel_tabs(r, a)
+
     st.divider()
     return (pl.get("market_value", 0.0), pl.get("cost_value", 0.0), pl.get("pnl_amt", 0.0))
 
@@ -339,24 +505,16 @@ def render_holdings_monitor():
 
     rows = st.session_state["holdings"]
     with st.spinner("加载持仓行情中…（首次约 10–20 秒）"):
-        tot = [0.0, 0.0, 0.0]   # 市值 / 成本额 / 盈亏额
-        cols = st.columns(2)
-        for i, r in enumerate(rows):
-            with cols[i % 2]:
-                res = _holding_panel(r)
-                if res:
-                    for k in range(3):
-                        tot[k] += res[k]
+        analyses = {str(r["code"]): stocks.analyze(r["code"], r.get("name", ""))
+                    for r in rows if str(r.get("code", "")).strip()}
 
-    if tot[1] > 0:   # 有填成本的组合汇总
-        pnl_pct = (tot[2] / tot[1] * 100) if tot[1] else 0.0
-        pc = "#3dba6a" if tot[2] >= 0 else "#e05555"
-        st.markdown(
-            f'<div class="card" style="text-align:center">'
-            f'<span style="font-size:12px;color:#5a6070">组合合计（已填成本部分）</span><br>'
-            f'市值 ¥{tot[0]:,.0f} · 成本 ¥{tot[1]:,.0f} · '
-            f'<b style="color:{pc};font-size:15px">盈亏 {tot[2]:+,.0f}（{pnl_pct:+.2f}%）</b></div>',
-            unsafe_allow_html=True)
+    # 仪表盘：组合盈亏总览 + 状态灯矩阵 + 未来14天事件
+    _render_dashboard(rows, analyses)
+
+    cols = st.columns(2)
+    for i, r in enumerate(rows):
+        with cols[i % 2]:
+            _holding_panel(r)
 
 
 # ── 顶部：品种切换 + 状态 ────────────────────────────────────
