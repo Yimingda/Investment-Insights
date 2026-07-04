@@ -188,6 +188,37 @@ def _stock_news(name: str) -> list[dict]:
         return []
 
 
+def _prewarm_holdings(rows: list[dict]) -> dict:
+    """并行预取所有持仓的行情分析(+新闻),避免逐只串行拉取(12 只串行 ~15-20s → 并行 ~3-5s)。
+
+    stocks.analyze / _stock_news 都是 @st.cache_data;这里只是并行把缓存提前填满,
+    随后渲染时 _holding_panel 内的同参调用直接命中缓存。
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    valid = [r for r in rows if str(r.get("code", "")).strip()]
+    if not valid:
+        return {}
+
+    # stocks.analyze / _stock_news 是 @st.cache_data(进程级、线程安全);从子线程调用会有无害
+    # 的 "missing ScriptRunContext" 日志警告,但缓存照常工作(与 radar 页并行拉取同一做法)。
+    def _an(r):
+        return str(r["code"]), stocks.analyze(r["code"], r.get("name", ""))
+
+    def _nw(r):
+        try:
+            _stock_news(r.get("name") or r["code"])   # 顺便预热新闻缓存
+        except Exception:
+            pass
+
+    with ThreadPoolExecutor(max_workers=min(8, len(valid))) as ex:
+        an_futs = [ex.submit(_an, r) for r in valid]
+        for r in valid:
+            ex.submit(_nw, r)                    # 新闻并行预热(结果进缓存,不需返回值)
+        analyses = dict(f.result() for f in an_futs)
+    return analyses
+
+
 def _intel_tabs(r: dict, a: dict):
     """📋 深度情报：决策日历 / 最新财报 / 半年大事 / 行业政策（Claude 联网生成 + 存盘）。"""
     from lib import intel
@@ -504,9 +535,8 @@ def render_holdings_monitor():
         st.rerun()
 
     rows = st.session_state["holdings"]
-    with st.spinner("加载持仓行情中…（首次约 10–20 秒）"):
-        analyses = {str(r["code"]): stocks.analyze(r["code"], r.get("name", ""))
-                    for r in rows if str(r.get("code", "")).strip()}
+    with st.spinner("加载持仓行情中…（首次约 3-5 秒，之后走缓存）"):
+        analyses = _prewarm_holdings(rows)   # 并行预取,不再逐只串行
 
     # 仪表盘：组合盈亏总览 + 状态灯矩阵 + 未来14天事件
     _render_dashboard(rows, analyses)
