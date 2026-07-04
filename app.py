@@ -531,7 +531,16 @@ def render_holdings_monitor():
                     st.error("导入失败：请用本页导出的 JSON 格式。")
 
     if st.button("⟳ 刷新行情", width="stretch"):
-        st.cache_data.clear()
+        # 只清持仓相关缓存(行情/分析/新闻),不再全局 st.cache_data.clear()
+        # —— 避免顺手清掉量化页的快照缓存和其它品种页,拖慢它们。
+        # 注:本函数内 `data` 被局部赋值(导入JSON处)遮蔽了模块级 lib.data,故此处另名导入。
+        from lib import data as _libdata
+        for _fn in (stocks.analyze, _stock_news, getattr(_libdata, "yf_history", None)):
+            try:
+                if _fn is not None:
+                    _fn.clear()
+            except Exception:
+                pass
         st.rerun()
 
     rows = st.session_state["holdings"]
