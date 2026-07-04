@@ -11,22 +11,10 @@ from . import compute as C
 _PLOT_CFG = {"displayModeBar": False}
 
 
-@st.cache_data(ttl=86400, show_spinner="拉取行情中…(首次约 10 秒,之后走缓存)")
 def _fetch():
-    try:
-        import yfinance as yf
-    except Exception:
-        return None, None
-    try:
-        df = yf.download(C.FETCH_TK, start="2010-01-01", interval="1d",
-                         auto_adjust=True, progress=False)
-    except Exception:
-        return None, None
-    if df is None or len(df) == 0:
-        return None, None
-    if not isinstance(df.columns, pd.MultiIndex):
-        return None, None
-    return df["Close"], df["Volume"]
+    # 读提交的行情快照(秒开)+ 补最近几根;快照缺失自动回退全量实时拉取
+    from lib import snapshot
+    return snapshot.load(C.FETCH_TK, with_volume=True, start="2010-01-01")
 
 
 def render():

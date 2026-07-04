@@ -22,25 +22,10 @@ ANAME = {"gold": "黄金", "btc": "比特币", "ndx": "纳指"}
 ACOL = {"gold": "#f1b000", "btc": "#9a7bff", "ndx": "#4d8fdb"}
 
 
-# ── 数据：一次性拉全部 ticker 的复权收盘，缓存 6 小时 ────────────────────
-@st.cache_data(ttl=21600, show_spinner=False)
+# ── 数据：读提交的行情快照(秒开)+ 补最近几根 ──────────────────────────
 def _fetch_closes():
-    try:
-        import yfinance as yf
-    except Exception:
-        return None
-    allt = Q.TICKERS + ["BTC-USD", "^NDX"]
-    try:
-        df = yf.download(allt, start="2005-01-01", interval="1d",
-                         auto_adjust=True, progress=False)
-    except Exception:
-        return None
-    if df is None or len(df) == 0:
-        return None
-    try:
-        close = df["Close"] if isinstance(df.columns, pd.MultiIndex) else df
-    except Exception:
-        return None
+    from lib import snapshot
+    close, _ = snapshot.load(Q.TICKERS + ["BTC-USD", "^NDX"], start="2005-01-01")
     return close
 
 

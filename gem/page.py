@@ -12,23 +12,10 @@ _PLOT_CFG = {"displayModeBar": False}
 _ALL_TK = ["SPY", "VEU", "ACWX", "EFA", "AGG", "BND", "BIL", "^IRX"]
 
 
-@st.cache_data(ttl=21600, show_spinner=False)
 def _fetch_closes():
-    try:
-        import yfinance as yf
-    except Exception:
-        return None
-    try:
-        df = yf.download(_ALL_TK, start="2001-01-01", interval="1d",
-                         auto_adjust=True, progress=False)
-    except Exception:
-        return None
-    if df is None or len(df) == 0:
-        return None
-    try:
-        return df["Close"] if isinstance(df.columns, pd.MultiIndex) else df
-    except Exception:
-        return None
+    from lib import snapshot
+    close, _ = snapshot.load(_ALL_TK, start="2001-01-01")
+    return close
 
 
 def _dark(fig, height=320, legend=True):

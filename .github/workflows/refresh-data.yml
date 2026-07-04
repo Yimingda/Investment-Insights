@@ -1,0 +1,38 @@
+name: Refresh price snapshot
+
+# 每个交易日美股收盘后刷新行情快照并提交,供 app 冷启动秒读(不必重下 16 年)。
+on:
+  schedule:
+    - cron: "30 22 * * 1-5"      # 22:30 UTC(约美东收盘后)工作日
+  workflow_dispatch: {}           # 也可在 Actions 页手动触发
+
+permissions:
+  contents: write
+
+concurrency:
+  group: refresh-snapshot
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install deps
+        run: pip install --quiet yfinance pandas pyarrow
+      - name: Fetch & write snapshot
+        run: python scripts/refresh_snapshot.py
+      - name: Commit if changed
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/snapshot_close.parquet data/snapshot_volume.parquet
+          if git diff --quiet --cached; then
+            echo "no change — skipping commit"
+          else
+            git commit -m "chore: refresh price snapshot [skip ci]"
+            git push
+          fi

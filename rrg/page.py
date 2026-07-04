@@ -11,26 +11,13 @@ from . import compute as C
 _PLOT_CFG = {"displayModeBar": False}
 
 
-@st.cache_data(ttl=21600, show_spinner=False)
 def _fetch_closes():
-    try:
-        import yfinance as yf
-    except Exception:
-        return None
+    from lib import snapshot
     tks = [C.BENCH] + C.SECTORS
-    try:
-        df = yf.download(tks, start="1998-12-01", interval="1d",
-                         auto_adjust=True, progress=False)
-    except Exception:
+    close, _ = snapshot.load(tks, start="1998-12-01")
+    if close is None:
         return None
-    if df is None or len(df) == 0:
-        return None
-    try:
-        close = df["Close"] if isinstance(df.columns, pd.MultiIndex) else df
-    except Exception:
-        return None
-    close = close.reindex(columns=tks).sort_index()
-    return close
+    return close.reindex(columns=tks).sort_index()
 
 
 def _dark(fig, height=460, legend=True):
