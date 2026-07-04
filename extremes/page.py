@@ -11,7 +11,7 @@ from . import compute as C
 _PLOT_CFG = {"displayModeBar": False}
 
 
-@st.cache_data(ttl=21600, show_spinner=False)
+@st.cache_data(ttl=86400, show_spinner="拉取行情中…(首次约 10 秒,之后走缓存)")
 def _fetch():
     try:
         import yfinance as yf
@@ -90,10 +90,10 @@ def render():
     fig.add_trace(go.Scatter(x=f.index, y=f["roro"], name="RORO",
                              line=dict(width=1.2, color="#e8853d")), row=3, col=1)
 
-    # decorations AFTER traces
-    for s, e in C.runs(f["gauge"] >= C.HI):
+    # decorations AFTER traces（WATCH 底色:合并+去噪,避免上百个碎片矩形拖慢渲染）
+    for s, e in C.watch_spans(f["gauge"], C.HI, above=True):
         fig.add_vrect(x0=s, x1=e, fillcolor="#e05555", opacity=0.07, line_width=0, layer="below", row=1, col=1)
-    for s, e in C.runs(f["gauge"] <= C.LO):
+    for s, e in C.watch_spans(f["gauge"], C.LO, above=False):
         fig.add_vrect(x0=s, x1=e, fillcolor="#3dba6a", opacity=0.07, line_width=0, layer="below", row=1, col=1)
     fig.update_yaxes(type="log", title_text="价格(对数)", row=1, col=1)
     fig.add_hrect(y0=C.HI, y1=2.6, fillcolor="#e05555", opacity=0.08, line_width=0, layer="below", row=2, col=1)

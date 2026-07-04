@@ -103,3 +103,28 @@ def runs(mask: pd.Series):
     if inside:
         out.append((start, prev))
     return out
+
+
+def watch_spans(gauge: pd.Series, thr: float, above: bool = True,
+                min_len: int = 3, max_gap: int = 6):
+    """WATCH 底色区间:合并相邻小段(间隔≤max_gap 交易日)+ 丢弃过短噪声(<min_len)。
+
+    温度计 16 年里反复穿越 ±0.8 会产生数百个碎片矩形,严重拖慢 plotly 渲染;
+    这里合并+去噪,把上百个矩形降到几十个,肉眼几乎无差别但快得多。
+    """
+    g = gauge.dropna()
+    if g.empty:
+        return []
+    mask = (g >= thr).values if above else (g <= thr).values
+    idx = g.index
+    pos = [i for i, v in enumerate(mask) if v]
+    if not pos:
+        return []
+    spans, s, p = [], pos[0], pos[0]
+    for q in pos[1:]:
+        if q - p <= max_gap:
+            p = q
+        else:
+            spans.append((s, p)); s = p = q
+    spans.append((s, p))
+    return [(idx[a], idx[b]) for a, b in spans if (b - a + 1) >= min_len]
