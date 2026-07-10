@@ -18,8 +18,8 @@ _PATH = os.path.join(_DIR, ".intel.json")
 _LEDGER = os.path.join(_DIR, ".intel_ledger.json")
 _LOCK = threading.Lock()
 
-EST_STOCK = 0.40     # 单只个股情报（日历+财报+大事）粗估（实测校准：3次检索+长上下文）
-EST_POLICY = 0.30    # 单个行业政策粗估
+EST_STOCK = 0.55     # 单只个股情报（日历+财报+大事）粗估（实测校准：3次检索+编排开销+长上下文）
+EST_POLICY = 0.40    # 单个行业政策粗估
 _PRICE = {"claude-opus-4-8": (5.0, 25.0), "claude-sonnet-4-6": (3.0, 15.0),
           "claude-haiku-4-5": (1.0, 5.0)}
 _SEARCH_FEE = 0.02   # 联网检索附加费粗估/次生成
@@ -179,6 +179,63 @@ def rule_calendar(code: str, today: date | None = None) -> list[dict]:
 
 
 # ── Claude 联网生成 ─────────────────────────────────────────
+_LAST_FAIL = ""     # 诊断：最近一次 _call_web 失败原因（写进 .intel_debug_last.txt）
+
+# 结构化输出 schema —— API 保证输出严格符合（所有 object 必须 additionalProperties:false）
+_STOCK_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "calendar": {"type": "array", "items": {
+            "type": "object",
+            "properties": {
+                "date": {"type": "string", "description": "YYYY-MM-DD，不确定填空串"},
+                "when": {"type": "string", "description": "显示用时间，如 8月下旬"},
+                "event": {"type": "string"},
+                "why": {"type": "string", "description": "为何影响加减仓决策，≤40字"},
+            },
+            "required": ["date", "when", "event", "why"],
+            "additionalProperties": False}},
+        "earnings": {"type": "object", "properties": {
+            "period": {"type": "string", "description": "如 2026年一季报"},
+            "summary": {"type": "string", "description": "营收/净利同比与利润率，≤80字"},
+            "beat": {"type": "string", "enum": ["超预期", "符合预期", "低于预期", "存在分歧"]},
+            "highlights": {"type": "array", "items": {"type": "string"}},
+            "risks": {"type": "array", "items": {"type": "string"}},
+            "verdict": {"type": "string", "description": "以 利多/中性/利空 开头的一句话结论"},
+        }, "required": ["period", "summary", "beat", "highlights", "risks", "verdict"],
+            "additionalProperties": False},
+        "events": {"type": "array", "items": {
+            "type": "object",
+            "properties": {
+                "date": {"type": "string", "description": "YYYY-MM-DD 或 YYYY-MM"},
+                "event": {"type": "string", "description": "≤40字"},
+                "impact": {"type": "string", "enum": ["+", "-", "0"]},
+                "note": {"type": "string", "description": "对股价影响，≤30字"},
+            },
+            "required": ["date", "event", "impact", "note"],
+            "additionalProperties": False}},
+    },
+    "required": ["calendar", "earnings", "events"],
+    "additionalProperties": False,
+}
+
+_POLICY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "items": {"type": "array", "items": {
+            "type": "object",
+            "properties": {
+                "date": {"type": "string", "description": "YYYY-MM"},
+                "policy": {"type": "string", "description": "政策/文件/动向，≤40字"},
+                "direction": {"type": "string", "enum": ["利多", "利空", "中性"]},
+                "impact": {"type": "string", "description": "对行业股价的影响机制，≤40字"},
+            },
+            "required": ["date", "policy", "direction", "impact"],
+            "additionalProperties": False}},
+    },
+    "required": ["items"],
+    "additionalProperties": False,
+}
 def _model():
     try:
         import streamlit as st
@@ -193,42 +250,57 @@ def _model():
 
 
 def _call_web(prompt: str, api_key: str, max_tokens: int = 6000,
-              max_searches: int = 3) -> tuple[str | None, float]:
+              max_searches: int = 3, schema: dict | None = None) -> tuple[str | None, float]:
     """带 web_search 的单次任务调用（pause_turn 循环）。返回 (文本, 实际花费)。
 
     成本护栏（实测教训：无限制搜索一次能烧 $1.8+）：
       - max_uses 硬限制检索次数；
-      - pause_turn 最多续 2 次（每次续都重发全部上下文，输入 token 很贵）；
-      - stop_reason=max_tokens 视为失败（输出被截断，JSON 不完整）。"""
+      - pause_turn 最多续 4 次；续传耗尽仍未完成 → 判失败（收尾文本是半成品）；
+      - stop_reason=max_tokens 视为失败（输出被截断）。
+    可靠性：传 schema 时启用结构化输出(output_config.format json_schema)，
+    API 层面保证返回合法 JSON —— 根治围栏/截断/串内裸引号等解析失败。"""
+    global _LAST_FAIL
     import anthropic
     client = anthropic.Anthropic(api_key=api_key)
     tools = [{"type": "web_search_20260209", "name": "web_search",
               "max_uses": max_searches}]
     mdl = _model()
+    kw = {}
+    if schema is not None:
+        kw["output_config"] = {"format": {"type": "json_schema", "schema": schema}}
     actual = _SEARCH_FEE * max_searches
     messages = [{"role": "user", "content": prompt}]
+    _LAST_FAIL = ""
     # 不向外抛异常：中途失败也要把已产生的 actual 带回去结算（否则账本漏记真实花费）
     try:
         resp = client.messages.create(model=mdl, max_tokens=max_tokens,
                                       thinking={"type": "adaptive"},
-                                      tools=tools, messages=messages)
+                                      tools=tools, messages=messages, **kw)
         actual += _cost(mdl, resp.usage)
-        for _ in range(2):
+        for _ in range(6):
             if resp.stop_reason != "pause_turn":
                 break
             messages.append({"role": "assistant", "content": resp.content})
             resp = client.messages.create(model=mdl, max_tokens=max_tokens,
                                           thinking={"type": "adaptive"},
-                                          tools=tools, messages=messages)
+                                          tools=tools, messages=messages, **kw)
             actual += _cost(mdl, resp.usage)
     except anthropic.AuthenticationError:
+        _LAST_FAIL = "auth"
         return "__AUTH__", actual
-    except Exception:
+    except Exception as e:
+        _LAST_FAIL = f"exception:{type(e).__name__}:{str(e)[:180]}"
         return None, actual
-    if resp.stop_reason == "max_tokens":      # 截断 → JSON 必坏，直接判失败
+    if resp.stop_reason in ("max_tokens", "pause_turn"):   # 截断/未完成 → 文本必是半成品
+        _LAST_FAIL = f"stop:{resp.stop_reason}(out={resp.usage.output_tokens})"
         return None, actual
-    txt = "".join(getattr(b, "text", "") for b in resp.content
-                  if getattr(b, "type", None) == "text").strip()
+    texts = [b.text for b in resp.content
+             if getattr(b, "type", None) == "text" and getattr(b, "text", "").strip()]
+    if not texts:
+        _LAST_FAIL = f"no_text(stop={resp.stop_reason})"
+        return None, actual
+    # 结构化输出时最终答案在最后一个 text 块（前面可能是检索间的叙述）
+    txt = texts[-1].strip() if schema is not None else "\n".join(texts).strip()
     return (txt or None), actual
 
 
@@ -347,16 +419,21 @@ def gen_stock(code: str, name: str, api_key: str) -> dict | str | None:
 {{"calendar":[{{"date":"YYYY-MM-DD或空","when":"显示用时间","event":"事件","why":"为何影响决策(≤40字)"}}],
 "earnings":{{"period":"如2026年一季报","summary":"营收/净利同比与利润率(≤80字)","beat":"超预期/符合/低于预期","highlights":["亮点"],"risks":["风险"],"verdict":"利多/中性/利空：一句话结论"}},
 "events":[{{"date":"YYYY-MM-DD或YYYY-MM","event":"事件(≤40字)","impact":"+/-/0","note":"影响(≤30字)"}}]}}
-所有信息须来自真实检索结果，不确定就不写，禁止编造日期。
-【重要】最多检索 3 次；检索后直接输出上述 JSON，不要输出任何检索过程、分析说明等 JSON 以外的文字；
-字符串值内部禁止使用英文双引号，需要引用时用「」。"""
+所有信息须来自真实检索结果，不确定就不写，禁止编造日期。最多检索 3 次，检索后立即输出结果。"""
     try:
-        txt, actual = _call_web(prompt, api_key)
-        if txt == "__AUTH__":
-            return "__AUTH__"
-        d = _parse_json(txt)
+        # max_tokens 必须给足：web_search 动态过滤的检索编排/代码执行全都计入输出 token，
+        # 实测一次 3 检索任务光编排就 ~6k，给小了(5-6k)模型还没写 JSON 就被截断
+        d = None
+        for attempt in (1, 2):     # 瞬时失败(网络抖动/续传超限)自动重试一次
+            txt, a = _call_web(prompt, api_key, max_tokens=16000, schema=_STOCK_SCHEMA)
+            actual += a
+            if txt == "__AUTH__":
+                return "__AUTH__"
+            d = _parse_json(txt)
+            if d:
+                break
+            _dump_debug(txt or f"(空) fail={_LAST_FAIL} (attempt {attempt})")
         if not d:
-            _dump_debug(txt)
             return None
         rec = {"generated_at": time.time(),
                "calendar": [x for x in d.get("calendar", []) if isinstance(x, dict) and x.get("event")][:8],
@@ -383,16 +460,19 @@ def gen_policy(industry: str, api_key: str) -> dict | str | None:
     today = date.today().isoformat()
     prompt = f"""请联网搜索中国「{industry}」行业近 12 个月（今天是 {today}）出台或持续生效的重要政策/监管动向，对 A 股该行业股价有实际影响的（6-10 条，按时间倒序）。只输出一个 JSON，不要其它文字：
 {{"items":[{{"date":"YYYY-MM","policy":"政策/文件/动向(≤40字)","direction":"利多/利空/中性","impact":"对行业股价的影响机制(≤40字)"}}]}}
-所有条目须来自真实检索结果，不确定就不写，禁止编造。
-【重要】最多检索 3 次；检索后直接输出上述 JSON，不要输出任何检索过程、分析说明等 JSON 以外的文字；
-字符串值内部禁止使用英文双引号，需要引用时用「」。"""
+所有条目须来自真实检索结果，不确定就不写，禁止编造。最多检索 3 次，检索后立即输出结果。"""
     try:
-        txt, actual = _call_web(prompt, api_key, max_tokens=5000)
-        if txt == "__AUTH__":
-            return "__AUTH__"
-        d = _parse_json(txt)
+        d = None
+        for attempt in (1, 2):     # 瞬时失败自动重试一次
+            txt, a = _call_web(prompt, api_key, max_tokens=12000, schema=_POLICY_SCHEMA)
+            actual += a
+            if txt == "__AUTH__":
+                return "__AUTH__"
+            d = _parse_json(txt)
+            if d:
+                break
+            _dump_debug(txt or f"(空) fail={_LAST_FAIL} (attempt {attempt})")
         if not d:
-            _dump_debug(txt)
             return None
         rec = {"generated_at": time.time(),
                "items": [x for x in d.get("items", []) if isinstance(x, dict) and x.get("policy")][:12]}
