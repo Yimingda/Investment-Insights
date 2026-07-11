@@ -4,6 +4,9 @@
 数据：yfinance / FRED / akshare（缺失则降级示例数据）。
 分析：有 ANTHROPIC_API_KEY 用 Claude，否则用规则引擎。
 """
+import faulthandler
+faulthandler.enable()   # 原生库段错误时把崩溃栈打进日志（云端排查 Segmentation fault 用）
+
 import html as _html
 import streamlit as st
 from datetime import datetime, date

@@ -9,6 +9,8 @@ font = "sans serif"
 [server]
 headless = true
 enableCORS = false
+# 云端不需要热重载(部署由 git 触发)；watchdog/inotify 是云端已知的段错误来源之一
+fileWatcherType = "none"
 
 [browser]
 gatherUsageStats = false
