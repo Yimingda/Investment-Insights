@@ -100,7 +100,9 @@ def make_gauge(score: int, label: str, color: str) -> go.Figure:
 def make_price_chart(history: list[float], dates: list[str], price: float,
                      accent: str = DEFAULT_ACCENT,
                      ma_ref: float | None = None, ma_label: str = "",
-                     price_prefix: str = "$") -> go.Figure:
+                     price_prefix: str = "$",
+                     overlays: list[tuple[str, list, str]] | None = None) -> go.Figure:
+    """overlays: [(名称, 序列(与 history 等长), 颜色)] —— 如 EMA30/50/200 叠加线。"""
     n = len(history)
     if not dates or len(dates) != n:
         dates = [(datetime.now() - timedelta(days=n - i)).strftime("%m/%d") for i in range(n)]
@@ -112,6 +114,16 @@ def make_price_chart(history: list[float], dates: list[str], price: float,
         line=dict(color=accent, width=2), mode="lines", name="价格",
         hovertemplate="<b>%{x}</b><br>" + price_prefix + "%{y:,.2f}<extra></extra>",
     ))
+    _has_overlay = False
+    if overlays:
+        for nm, series, col in overlays:
+            if series and len(series) == n:
+                _has_overlay = True
+                fig.add_trace(go.Scatter(
+                    x=dates, y=series, mode="lines", name=nm,
+                    line=dict(color=col, width=1.1),
+                    hovertemplate=nm + ": " + price_prefix + "%{y:,.2f}<extra></extra>",
+                ))
     if ma_ref:
         fig.add_hline(y=ma_ref, line=dict(color="#e08030", dash="dash", width=1.5),
                       annotation_text=ma_label or f"MA {ma_ref:,.0f}",
@@ -133,6 +145,11 @@ def make_price_chart(history: list[float], dates: list[str], price: float,
                    tickprefix=price_prefix, tickformat=","),
         hovermode="x unified",
     )
+    if _has_overlay:   # 有 EMA 等叠加线时显示横向小图例，便于辨认各线
+        fig.update_layout(showlegend=True,
+                          legend=dict(orientation="h", x=0, y=1.12,
+                                      font=dict(size=9, color="#9aa0b0"),
+                                      bgcolor="rgba(0,0,0,0)"))
     return fig
 
 

@@ -418,24 +418,39 @@ def _holding_panel(r: dict):
     else:
         st.caption("未填成本 —— 顶部「编辑持仓」填成本价/股数即可显示盈亏与回本价。")
 
-    # 走势图（叠加成本线）。注：曾写成 theme.make_price_chart（未绑定名）被裸 except 吞掉，图从未显示
+    # 走势图（叠加成本线 + EMA30/50/200）。注：曾因 theme. 笔误被裸 except 吞掉，图从未显示
+    _EMA_COLORS = {"EMA30": "#e0a458", "EMA50": "#7aa2f7", "EMA200": "#b48ead"}
     try:
+        overlays = [(k, v, _EMA_COLORS[k]) for k, v in (a.get("emas") or {}).items() if v]
         fig = make_price_chart(
             a["closes"], a["dates"], price, accent=lcol,
             ma_ref=(cost if cost and cost > 0 else a["ma60"]),
-            ma_label=("成本" if cost and cost > 0 else "MA60"), price_prefix="¥")
+            ma_label=("成本" if cost and cost > 0 else "MA60"), price_prefix="¥",
+            overlays=overlays)
         st.plotly_chart(fig, width="stretch", key=f"hchart_{r['code']}")
     except Exception as _chart_err:
         st.caption(f"（走势图暂不可用：{type(_chart_err).__name__}）")
 
-    # 技术反转信号
+    # 技术反转信号（含 EMA30/50/200 排列判读）
     macd_txt = ("金叉↑" if (a["macd_hist"] or 0) > 0 else "死叉↓") if a["macd_hist"] is not None else "—"
     rsi_txt = ("超卖<30" if a["rsi"] < 30 else ("超买>70" if a["rsi"] > 70 else "中性"))
+    _em = a.get("emas") or {}
+    ema_txt = ""
+    if all(_em.get(k) for k in ("EMA30", "EMA50", "EMA200")):
+        e30, e50, e200 = _em["EMA30"][-1], _em["EMA50"][-1], _em["EMA200"][-1]
+        if e30 > e50 > e200:
+            arr = "多头排列↑"
+        elif e30 < e50 < e200:
+            arr = "空头排列↓"
+        else:
+            arr = "纠缠"
+        ema_txt = (f' · EMA30/50/200 {arr}'
+                   f'（价{"上" if price >= e200 else "下"}方于EMA200）')
     st.markdown(
         f'<div style="font-size:11.5px;color:#9aa0b0;margin:2px 0 4px">'
         f'📐 技术：均线 {"多头" if a["bullish_ma"] else "空头"}排列 · 价{"上" if price>=a["ma60"] else "下"}穿60日线 · '
         f'RSI {a["rsi"]:.0f}({rsi_txt}) · MACD {macd_txt} · 距高点 {a["drawdown"]:.0f}% · '
-        f'评分 {a["score"]}/100</div>', unsafe_allow_html=True)
+        f'评分 {a["score"]}/100{ema_txt}</div>', unsafe_allow_html=True)
 
     # 关键上涨影响因子
     cat = pf.CATALYSTS.get(r["code"])

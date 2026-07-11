@@ -40,7 +40,7 @@ def _advice(score: int, price: float, ma60: float, rsi: float, name: str) -> str
 def analyze(code: str, name: str = "") -> dict:
     t = to_ticker(code)
     display = name or code
-    res = data.yf_history(t, period="1y")
+    res = data.yf_history(t, period="2y")   # 2年历史：EMA200 需要 ≥200 根才收敛
     if not res or len(res[0]) < 20:
         return {"ok": False, "code": code, "ticker": t, "name": display}
     closes = res[0]
@@ -72,6 +72,10 @@ def analyze(code: str, name: str = "") -> dict:
         "score": score, "advice": _advice(score, price, ma60, rsi, display),
         "closes": closes[-120:], "dates": res[1][-120:],   # 供持仓监控画图
         "drawdown": indicators.drawdown_from_high(closes[-120:]),
+        # EMA 叠加线：全量历史上计算后截取显示窗口，数据不足该周期则为 None
+        "emas": {f"EMA{p}": ([round(v, 3) for v in indicators._ema_series(closes, p)[-120:]]
+                             if len(closes) >= p else None)
+                 for p in (30, 50, 200)},
     }
 
 
