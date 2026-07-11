@@ -7,12 +7,13 @@
 # 本地正常恰因本地是 1.58(Tornado, 纯Python)。锁 <1.59 回到稳定网络栈。
 streamlit>=1.35.0,<1.59
 plotly>=5.20.0
-pandas>=2.2.0,<3; python_version < "3.14"       # RRG/GEM 用 resample("ME") 需 >=2.2
-pandas>=2.3; python_version >= "3.14"
+# 段错误实锤(faulthandler C栈): pandas3 默认 Arrow 字符串 → yfinance 建 DataFrame 时走
+# pyarrow25 的 AllocateResizableBuffer → cp314 linux wheel 段错误。锁 pandas<3(2.3.3 有
+# cp314 wheel，不走 Arrow 字符串) + pyarrow<25(24.0.0 有 cp314 wheel，本地实测正常)。
+pandas>=2.2.0,<3       # RRG/GEM 用 resample("ME") 需 >=2.2
 numpy>=1.26.0,<2.3; python_version < "3.14"     # 宏观四象限 z-score / 动量计算
-numpy>=2.4; python_version >= "3.14"
-pyarrow>=14.0.0,<21; python_version < "3.14"    # 行情快照 parquet(lib/snapshot.py)
-pyarrow>=24; python_version >= "3.14"
+numpy>=2.4; python_version >= "3.14"            # 2.2.x 无 cp314 wheel 会触发源码编译
+pyarrow>=14.0.0,<25    # 行情快照 parquet(lib/snapshot.py)
 requests>=2.31.0
 # 实时行情：股票/ETF/外汇/加密/期货/指数（含 A股指数 000300.SS 等）
 yfinance>=0.2.40
