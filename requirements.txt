@@ -2,7 +2,10 @@
 # (pandas3/pyarrow24 组合)启动即 Segmentation fault；而旧版本无 cp314 wheel 会触发源码
 # 编译失败(无 cmake)。故按 Python 版本自适应：<3.14 锁成熟版本段(推荐云端设为 3.13)，
 # >=3.14 只能放行最新 wheel(有段错误风险——请在 Cloud 设置里把 Python 降到 3.13)。
-streamlit>=1.35.0,<1.60
+# streamlit 1.59 把服务器从 Tornado 换成 uvicorn/httptools(原生C扩展)，其 cp314 wheel
+# 在云端 Linux 启动即段错误(日志: "Uvicorn server started" 后立刻 Segmentation fault)；
+# 本地正常恰因本地是 1.58(Tornado, 纯Python)。锁 <1.59 回到稳定网络栈。
+streamlit>=1.35.0,<1.59
 plotly>=5.20.0
 pandas>=2.2.0,<3; python_version < "3.14"       # RRG/GEM 用 resample("ME") 需 >=2.2
 pandas>=2.3; python_version >= "3.14"
