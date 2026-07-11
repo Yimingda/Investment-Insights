@@ -1,10 +1,15 @@
-# ⚠️ 原生依赖统一锁到成熟版本段：2026-07-11 云端换上最新 wheel 后启动即
-# Segmentation fault(本地 Windows 同版本正常，Linux wheel 有雷)。若需升级，逐个放开验证。
+# ⚠️ 2026-07-11 云端事故记录：Streamlit Cloud 跑在 Python 3.14 上，最新 Linux wheel
+# (pandas3/pyarrow24 组合)启动即 Segmentation fault；而旧版本无 cp314 wheel 会触发源码
+# 编译失败(无 cmake)。故按 Python 版本自适应：<3.14 锁成熟版本段(推荐云端设为 3.13)，
+# >=3.14 只能放行最新 wheel(有段错误风险——请在 Cloud 设置里把 Python 降到 3.13)。
 streamlit>=1.35.0,<1.60
 plotly>=5.20.0
-pandas>=2.2.0,<3       # RRG/GEM 用 resample("ME");"ME" 别名需 pandas>=2.2
-numpy>=1.26.0,<2.3     # 宏观四象限的因果 z-score / 动量计算
-pyarrow>=14.0.0,<21    # 读取提交的行情快照 parquet(lib/snapshot.py)
+pandas>=2.2.0,<3; python_version < "3.14"       # RRG/GEM 用 resample("ME") 需 >=2.2
+pandas>=2.3; python_version >= "3.14"
+numpy>=1.26.0,<2.3; python_version < "3.14"     # 宏观四象限 z-score / 动量计算
+numpy>=2.4; python_version >= "3.14"
+pyarrow>=14.0.0,<21; python_version < "3.14"    # 行情快照 parquet(lib/snapshot.py)
+pyarrow>=24; python_version >= "3.14"
 requests>=2.31.0
 # 实时行情：股票/ETF/外汇/加密/期货/指数（含 A股指数 000300.SS 等）
 yfinance>=0.2.40
