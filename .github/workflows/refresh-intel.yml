@@ -1,0 +1,50 @@
+name: Refresh stock intel (nightly batch)
+
+# 每周日深夜用 Batch API(五折)批量刷新 12 只个股情报 + 9 个行业政策,结果提交进
+# data/intel.json —— 云端/本地 app 直接读取该共享层。两班制: 第一班提交批量,
+# 若批量超 55 分钟未完成则留 pending, 第二班自动回收。
+# cron 刻意排在低使用时段(北京周一凌晨),因为 push 会触发 Streamlit Cloud 重启。
+# 需要仓库 Secret: ANTHROPIC_API_KEY (Settings → Secrets and variables → Actions)
+on:
+  schedule:
+    - cron: "0 21 * * 0"         # 周日 21:00 UTC = 北京周一 05:00：提交批量
+    - cron: "0 23 * * 0"         # 周日 23:00 UTC = 北京周一 07:00：回收 pending(带检索的批量可能 >1h)
+  workflow_dispatch: {}           # 也可在 Actions 页手动触发
+
+permissions:
+  contents: write
+
+concurrency:
+  group: refresh-intel
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install deps
+        run: pip install --quiet anthropic
+      - name: Batch refresh intel
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_MODEL: claude-sonnet-4-6
+          REFRESH_DAYS: "6"
+        run: python scripts/refresh_intel.py
+      - name: Commit if changed
+        if: always()               # 脚本失败/超时也要提交 pending(断点续传的生命线)
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A data/        # 目录 pathspec：文件缺失不会 fatal，增删改全纳入
+          if git diff --quiet --cached; then
+            echo "no change — skipping commit"
+          else
+            git commit -m "chore: nightly batch refresh stock intel [skip ci]"
+            git pull --rebase origin master   # 防与快照 Action 并发推送冲突
+            git push
+          fi

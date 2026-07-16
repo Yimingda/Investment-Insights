@@ -14,12 +14,13 @@ import time
 from datetime import date, datetime, timedelta
 
 _DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_PATH = os.path.join(_DIR, ".intel.json")
+_PATH = os.path.join(_DIR, ".intel.json")                 # 本地手动生成(gitignore)
+_BASE_PATH = os.path.join(_DIR, "data", "intel.json")     # 夜间批量刷新提交进仓库(共享层)
 _LEDGER = os.path.join(_DIR, ".intel_ledger.json")
 _LOCK = threading.Lock()
 
-EST_STOCK = 0.55     # 单只个股情报（日历+财报+大事）粗估（实测校准：3次检索+编排开销+长上下文）
-EST_POLICY = 0.40    # 单个行业政策粗估
+EST_STOCK = 0.40     # 单只个股情报粗估（2次检索+缓存后实测 ~$0.2）
+EST_POLICY = 0.30    # 单个行业政策粗估
 _PRICE = {"claude-opus-4-8": (5.0, 25.0), "claude-sonnet-4-6": (3.0, 15.0),
           "claude-haiku-4-5": (1.0, 5.0)}
 _SEARCH_FEE = 0.02   # 联网检索附加费粗估/次生成
@@ -99,9 +100,14 @@ def _settle(est: float, actual: float):
 
 
 def _cost(model: str, usage) -> float:
+    """真实花费。input_tokens 只是未缓存余量——缓存写 1.25×、缓存读 0.1× 必须计入，
+    否则开启 prompt caching 后账本会系统性低估(预算护栏失真)。"""
     pin, pout = _PRICE.get(model, (5.0, 25.0))
     try:
-        return (usage.input_tokens * pin + usage.output_tokens * pout) / 1e6
+        cw = getattr(usage, "cache_creation_input_tokens", 0) or 0
+        cr = getattr(usage, "cache_read_input_tokens", 0) or 0
+        return (usage.input_tokens * pin + cw * pin * 1.25 + cr * pin * 0.10
+                + usage.output_tokens * pout) / 1e6
     except Exception:
         return 0.0
 
@@ -116,16 +122,42 @@ def _dump_debug(txt: str | None):
 
 
 # ── 结果持久化 ───────────────────────────────────────────────
-def _load_all() -> dict:
+def _load_json(path: str) -> dict:
     try:
-        with open(_PATH, encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             d = json.load(f)
         return d if isinstance(d, dict) else {}
     except Exception:
         return {}
 
 
-def _save_all(d: dict):
+def _ts(rec) -> float:
+    try:
+        return float(rec.get("generated_at") or 0)
+    except Exception:
+        return 0.0
+
+
+def _load_all() -> dict:
+    """合并视图：仓库共享层(data/intel.json，夜间批量提交) + 本地手动生成层，
+    同一 key 取 generated_at 较新者。云端重启后共享层仍在 → 情报不丢。
+    脏记录(非 dict / generated_at 非法)逐条跳过，绝不让一条脏数据拖垮整页。"""
+    base, local = _load_json(_BASE_PATH), _load_json(_PATH)
+    out: dict = {}
+    for kind in set(list(base.keys()) + list(local.keys())):
+        b = base.get(kind) if isinstance(base.get(kind), dict) else {}
+        l = local.get(kind) if isinstance(local.get(kind), dict) else {}
+        merged = {k: v for k, v in b.items() if isinstance(v, dict)}
+        for k, v in l.items():
+            if not isinstance(v, dict):
+                continue
+            if k not in merged or _ts(v) >= _ts(merged[k]):
+                merged[k] = v
+        out[kind] = merged
+    return out
+
+
+def _save_local(d: dict):
     try:
         with open(_PATH, "w", encoding="utf-8") as f:
             json.dump(d, f, ensure_ascii=False)
@@ -143,9 +175,9 @@ def get_policy(industry: str) -> dict | None:
 
 def _put(kind: str, key: str, val: dict):
     with _LOCK:
-        d = _load_all()
+        d = _load_json(_PATH)          # 只写本地层，不把共享层复制进来
         d.setdefault(kind, {})[key] = val
-        _save_all(d)
+        _save_local(d)
 
 
 def age_str(ts: float | None) -> str:
@@ -249,8 +281,27 @@ def _model():
     return m if ok else "claude-sonnet-4-6"
 
 
+def stock_prompt(code: str, name: str, today: str | None = None) -> str:
+    """个股情报生成 prompt（交互与夜间批量共用同一份，保证口径一致）。"""
+    today = today or date.today().isoformat()
+    return f"""请联网搜索 A 股上市公司「{name}（{code}）」的最新信息（今天是 {today}），完成三项任务后，只输出一个 JSON（中文内容，不要输出 JSON 以外的任何文字）：
+
+1. calendar：未来 1-6 个月内影响“加仓/减仓/持有”决策的关键事件（3-6 条）：财报披露、分红除权、股东大会、限售解禁、重要产品/订单/行业节点等。确切日期填 date(YYYY-MM-DD)，不确定的 date 填 ""、只填 when（如"8月下旬"）。
+2. earnings：最新一期已披露财报（写明哪一期）的分析：营收与净利同比、关键利润率变化、超/低于预期、2-4 条核心亮点、2-3 条风险、一句话结论 verdict（利多/中性/利空 开头）。
+3. events：过去 6 个月对股价有实际影响的大事（5-8 条，按时间倒序）：公告、订单、政策冲击、管理层/股权变动等；impact 用 "+"（利多）/"-"（利空）/"0"（中性）。
+所有信息须来自真实检索结果，不确定就不写，禁止编造日期。最多检索 2 次，检索后立即输出结果。"""
+
+
+def policy_prompt(industry: str, today: str | None = None) -> str:
+    """行业政策生成 prompt（交互与夜间批量共用）。"""
+    today = today or date.today().isoformat()
+    return f"""请联网搜索中国「{industry}」行业近 12 个月（今天是 {today}）出台或持续生效的重要政策/监管动向，对 A 股该行业股价有实际影响的（6-10 条，按时间倒序）。只输出一个 JSON，不要其它文字：
+{{"items":[{{"date":"YYYY-MM","policy":"政策/文件/动向(≤40字)","direction":"利多/利空/中性","impact":"对行业股价的影响机制(≤40字)"}}]}}
+所有条目须来自真实检索结果，不确定就不写，禁止编造。最多检索 2 次，检索后立即输出结果。"""
+
+
 def _call_web(prompt: str, api_key: str, max_tokens: int = 6000,
-              max_searches: int = 3, schema: dict | None = None) -> tuple[str | None, float]:
+              max_searches: int = 2, schema: dict | None = None) -> tuple[str | None, float]:
     """带 web_search 的单次任务调用（pause_turn 循环）。返回 (文本, 实际花费)。
 
     成本护栏（实测教训：无限制搜索一次能烧 $1.8+）：
@@ -272,9 +323,11 @@ def _call_web(prompt: str, api_key: str, max_tokens: int = 6000,
     messages = [{"role": "user", "content": prompt}]
     _LAST_FAIL = ""
     # 不向外抛异常：中途失败也要把已产生的 actual 带回去结算（否则账本漏记真实花费）
+    # cache_control: 续传轮重发全部上下文(含检索结果)，提示词缓存把重发部分降到 1/10 价
     try:
         resp = client.messages.create(model=mdl, max_tokens=max_tokens,
                                       thinking={"type": "adaptive"},
+                                      cache_control={"type": "ephemeral"},
                                       tools=tools, messages=messages, **kw)
         actual += _cost(mdl, resp.usage)
         for _ in range(6):
@@ -283,6 +336,7 @@ def _call_web(prompt: str, api_key: str, max_tokens: int = 6000,
             messages.append({"role": "assistant", "content": resp.content})
             resp = client.messages.create(model=mdl, max_tokens=max_tokens,
                                           thinking={"type": "adaptive"},
+                                          cache_control={"type": "ephemeral"},
                                           tools=tools, messages=messages, **kw)
             actual += _cost(mdl, resp.usage)
     except anthropic.AuthenticationError:
@@ -397,6 +451,20 @@ def _parse_json(txt: str) -> dict | None:
     return None
 
 
+def build_stock_rec(d: dict) -> dict:
+    """把模型 JSON 清洗成个股情报记录（交互与夜间批量共用）。"""
+    return {"generated_at": time.time(),
+            "calendar": [x for x in d.get("calendar", []) if isinstance(x, dict) and x.get("event")][:8],
+            "earnings": d.get("earnings") if isinstance(d.get("earnings"), dict) else None,
+            "events": [x for x in d.get("events", []) if isinstance(x, dict) and x.get("event")][:10]}
+
+
+def build_policy_rec(d: dict) -> dict:
+    """把模型 JSON 清洗成行业政策记录（交互与夜间批量共用）。"""
+    return {"generated_at": time.time(),
+            "items": [x for x in d.get("items", []) if isinstance(x, dict) and x.get("policy")][:12]}
+
+
 def gen_stock(code: str, name: str, api_key: str) -> dict | str | None:
     """生成单只个股情报：决策日历 + 最新财报分析 + 近半年大事。
     返回 dict；预算不足返回 "__BUDGET__"；key 无效返回 "__AUTH__"；失败返回 None。"""
@@ -408,18 +476,7 @@ def gen_stock(code: str, name: str, api_key: str) -> dict | str | None:
     if not _reserve(EST_STOCK):
         return "__BUDGET__"
     actual = 0.0
-    today = date.today().isoformat()
-    prompt = f"""请联网搜索 A 股上市公司「{name}（{code}）」的最新信息（今天是 {today}），完成三项任务后，只输出一个 JSON（中文内容，不要输出 JSON 以外的任何文字）：
-
-1. calendar：未来 1-6 个月内影响“加仓/减仓/持有”决策的关键事件（3-6 条）：财报披露、分红除权、股东大会、限售解禁、重要产品/订单/行业节点等。确切日期填 date(YYYY-MM-DD)，不确定的 date 填 ""、只填 when（如"8月下旬"）。
-2. earnings：最新一期已披露财报（写明哪一期）的分析：营收与净利同比、关键利润率变化、超/低于预期、2-4 条核心亮点、2-3 条风险、一句话结论 verdict（利多/中性/利空 开头）。
-3. events：过去 6 个月对股价有实际影响的大事（5-8 条，按时间倒序）：公告、订单、政策冲击、管理层/股权变动等；impact 用 "+"（利多）/"-"（利空）/"0"（中性）。
-
-严格按此结构输出：
-{{"calendar":[{{"date":"YYYY-MM-DD或空","when":"显示用时间","event":"事件","why":"为何影响决策(≤40字)"}}],
-"earnings":{{"period":"如2026年一季报","summary":"营收/净利同比与利润率(≤80字)","beat":"超预期/符合/低于预期","highlights":["亮点"],"risks":["风险"],"verdict":"利多/中性/利空：一句话结论"}},
-"events":[{{"date":"YYYY-MM-DD或YYYY-MM","event":"事件(≤40字)","impact":"+/-/0","note":"影响(≤30字)"}}]}}
-所有信息须来自真实检索结果，不确定就不写，禁止编造日期。最多检索 3 次，检索后立即输出结果。"""
+    prompt = stock_prompt(str(code), name)
     try:
         # max_tokens 必须给足：web_search 动态过滤的检索编排/代码执行全都计入输出 token，
         # 实测一次 3 检索任务光编排就 ~6k，给小了(5-6k)模型还没写 JSON 就被截断
@@ -435,10 +492,7 @@ def gen_stock(code: str, name: str, api_key: str) -> dict | str | None:
             _dump_debug(txt or f"(空) fail={_LAST_FAIL} (attempt {attempt})")
         if not d:
             return None
-        rec = {"generated_at": time.time(),
-               "calendar": [x for x in d.get("calendar", []) if isinstance(x, dict) and x.get("event")][:8],
-               "earnings": d.get("earnings") if isinstance(d.get("earnings"), dict) else None,
-               "events": [x for x in d.get("events", []) if isinstance(x, dict) and x.get("event")][:10]}
+        rec = build_stock_rec(d)
         _put("stocks", str(code), rec)
         return rec
     except Exception:
@@ -457,10 +511,7 @@ def gen_policy(industry: str, api_key: str) -> dict | str | None:
     if not _reserve(EST_POLICY):
         return "__BUDGET__"
     actual = 0.0
-    today = date.today().isoformat()
-    prompt = f"""请联网搜索中国「{industry}」行业近 12 个月（今天是 {today}）出台或持续生效的重要政策/监管动向，对 A 股该行业股价有实际影响的（6-10 条，按时间倒序）。只输出一个 JSON，不要其它文字：
-{{"items":[{{"date":"YYYY-MM","policy":"政策/文件/动向(≤40字)","direction":"利多/利空/中性","impact":"对行业股价的影响机制(≤40字)"}}]}}
-所有条目须来自真实检索结果，不确定就不写，禁止编造。最多检索 3 次，检索后立即输出结果。"""
+    prompt = policy_prompt(industry)
     try:
         d = None
         for attempt in (1, 2):     # 瞬时失败自动重试一次
@@ -474,8 +525,7 @@ def gen_policy(industry: str, api_key: str) -> dict | str | None:
             _dump_debug(txt or f"(空) fail={_LAST_FAIL} (attempt {attempt})")
         if not d:
             return None
-        rec = {"generated_at": time.time(),
-               "items": [x for x in d.get("items", []) if isinstance(x, dict) and x.get("policy")][:12]}
+        rec = build_policy_rec(d)
         _put("policies", industry, rec)
         return rec
     except Exception:
