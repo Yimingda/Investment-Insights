@@ -71,6 +71,15 @@ def _roll_z(x: pd.Series, win: int, clip: float = 4.0) -> pd.Series:
     return ((x - mu) / sd.replace(0, np.nan)).clip(-clip, clip)
 
 
+def gold_silver_ratio(closes: dict[str, pd.Series]) -> pd.Series | None:
+    """金银比 GC/SI。>90 白银相对便宜、<45 白银相对贵、~69 为长期均值。"""
+    g, s = closes.get("gold"), closes.get("silver")
+    if g is None or s is None:
+        return None
+    r = (g / s).dropna()
+    return r if len(r) else None
+
+
 def roro(closes: dict[str, pd.Series], win: int = 90) -> pd.Series:
     """跨资产风险偏好:BTC/黄金、纳指/黄金 两比价的 90 日 z 均值。>0 偏进攻,<0 偏避险。"""
     g = closes["gold"]

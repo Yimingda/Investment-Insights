@@ -46,24 +46,39 @@ def render():
         return
     cur = f.iloc[-1]
 
+    # 金银比(仅贵金属视图展示第四行子图 + 指标)
+    gsr = C.gold_silver_ratio(closes_all) if asset in ("gold", "silver") else None
+    if gsr is not None:
+        gsr = gsr.reindex(f.index).dropna()
+        if gsr.empty:
+            gsr = None
+
     # 当前快照
-    m = st.columns(5)
+    m = st.columns(6 if gsr is not None else 5)
     m[0].metric("现价", f"{cur['close']:,.0f}")
     m[1].metric("距历史高", f"{cur['dd']*100:+.1f}%")
     m[2].metric("温度计 (σ)", f"{cur['gauge']:+.2f}",
                 "TOP 观察" if cur["gauge"] >= C.HI else ("BOTTOM 观察" if cur["gauge"] <= C.LO else "中性"))
     m[3].metric("成交量异常 vol_z", f"{cur['vol_z']:+.2f}")
     m[4].metric("风险偏好 RORO", f"{cur['roro']:+.2f}")
+    if gsr is not None:
+        pct = float((gsr < gsr.iloc[-1]).mean() * 100)
+        m[5].metric("金银比 GC/SI", f"{gsr.iloc[-1]:.1f}",
+                    f"历史分位 {pct:.0f}%（越高白银越便宜）", delta_color="off")
 
     ev = C.events_df(asset)
     ev = ev[(ev["date"] >= f.index.min()) & (ev["date"] <= f.index.max())]
 
-    # ── 三联图(共享 x)────────────────────────────────────────────────
-    fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.04,
-                        row_heights=[0.46, 0.30, 0.24],
-                        subplot_titles=[f"{C.ASSET_CN[asset]} 价格(对数)+ TOP/BOTTOM 观察投影",
-                                        "regime 温度计(合成,±0.8 观察带)",
-                                        "成交量异常 vol_z + 风险偏好 RORO(σ)"])
+    # ── 联图(共享 x;贵金属多一行金银比)───────────────────────────────
+    n_rows = 4 if gsr is not None else 3
+    titles = [f"{C.ASSET_CN[asset]} 价格(对数)+ TOP/BOTTOM 观察投影",
+              "regime 温度计(合成,±0.8 观察带)",
+              "成交量异常 vol_z + 风险偏好 RORO(σ)"]
+    heights = [0.46, 0.30, 0.24] if n_rows == 3 else [0.40, 0.24, 0.18, 0.18]
+    if n_rows == 4:
+        titles.append("金银比 GC/SI（45 银贵 · 69 均值 · 90 银便宜 · 125 极值）")
+    fig = make_subplots(rows=n_rows, cols=1, shared_xaxes=True, vertical_spacing=0.04,
+                        row_heights=heights, subplot_titles=titles)
     # traces FIRST(plotly:子图无 trace 时先加的 shape 会被丢弃)
     fig.add_trace(go.Scatter(x=f.index, y=f["close"], name="价格",
                              line=dict(width=1, color="#4d8fdb"), showlegend=False), row=1, col=1)
@@ -77,6 +92,10 @@ def render():
                          marker_color="#74c0fc", opacity=0.5), row=3, col=1)
     fig.add_trace(go.Scatter(x=f.index, y=f["roro"], name="RORO",
                              line=dict(width=1.2, color="#e8853d")), row=3, col=1)
+    if gsr is not None:
+        fig.add_trace(go.Scatter(x=gsr.index, y=gsr, name="金银比",
+                                 line=dict(width=1.2, color="#c9a227"), showlegend=False,
+                                 hovertemplate="金银比: %{y:.1f}<extra></extra>"), row=4, col=1)
 
     # decorations AFTER traces（WATCH 底色:合并+去噪,避免上百个碎片矩形拖慢渲染）
     for s, e in C.watch_spans(f["gauge"], C.HI, above=True):
@@ -93,15 +112,23 @@ def render():
     fig.add_hline(y=2, line_dash="dot", line_color="#5a6070", row=3, col=1)
     fig.add_hline(y=0, line_color="#3a3e4a", row=3, col=1)
     fig.update_yaxes(title_text="σ", range=[-3.5, 6], row=3, col=1)
+    if gsr is not None:                       # 金银比关键水位
+        for lv, col_, lab in ((45, "#e05555", "银贵"), (69, "#8a8fa3", "均值"),
+                              (90, "#3dba6a", "银便宜"), (125, "#3dba6a", "极值")):
+            fig.add_hline(y=lv, line_dash="dot", line_color=col_, opacity=0.7,
+                          annotation_text=f"{lv} {lab}", annotation_position="right",
+                          annotation_font=dict(size=9, color=col_), row=4, col=1)
+        fig.update_yaxes(title_text="GC/SI", row=4, col=1)
     for _, e in ev.iterrows():
         color = C.ev_color(e["type"])
-        for r in range(1, 4):
+        for r in range(1, n_rows + 1):
             kw = dict(annotation_text=e["id"], annotation_position="top",
                       annotation_font_size=8, annotation_textangle=-90) if r == 1 else {}
             fig.add_vline(x=e["date"], line_dash="dash", line_color=color,
                           opacity=0.5, row=r, col=1, **kw)
 
-    fig.update_layout(height=760, paper_bgcolor="#111318", plot_bgcolor="#111318",
+    fig.update_layout(height=760 if n_rows == 3 else 920,
+                      paper_bgcolor="#111318", plot_bgcolor="#111318",
                       font=dict(color="#9aa0ad", size=11), margin=dict(l=18, r=18, t=40, b=18),
                       hovermode="x unified", barmode="overlay", showlegend=False)
     fig.update_xaxes(gridcolor="#1e2130", color="#5a6070")
