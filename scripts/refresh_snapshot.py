@@ -15,8 +15,8 @@ import yfinance as yf
 
 # 所有页面用到的 ticker 并集(新增页面记得在此补上)
 TICKERS = sorted(set([
-    # 极值追踪
-    "GC=F", "BTC-USD", "^NDX", "GLD", "QQQ",
+    # 极值追踪(白银 SI=F 借 SLV 成交量)
+    "GC=F", "SI=F", "BTC-USD", "^NDX", "GLD", "SLV", "QQQ",
     # 宏观四象限 (Dalio) + 美林时钟代理
     "HG=F", "SPY", "SHY", "HYG", "LQD", "TIP", "IEF", "DBC", "CL=F",
     # 双动量 GEM

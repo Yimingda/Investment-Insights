@@ -13,10 +13,10 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-ASSETS = {"gold": "GC=F", "btc": "BTC-USD", "ndx": "^NDX"}
-ASSET_CN = {"gold": "黄金", "btc": "比特币", "ndx": "纳指100"}
-VOL_PROXY = {"gold": "GLD", "btc": "BTC-USD", "ndx": "QQQ"}   # 借用 ETF 成交量(^NDX 无量)
-FETCH_TK = ["GC=F", "BTC-USD", "^NDX", "GLD", "QQQ"]
+ASSETS = {"gold": "GC=F", "silver": "SI=F", "btc": "BTC-USD", "ndx": "^NDX"}
+ASSET_CN = {"gold": "黄金", "silver": "白银", "btc": "比特币", "ndx": "纳指100"}
+VOL_PROXY = {"gold": "GLD", "silver": "SLV", "btc": "BTC-USD", "ndx": "QQQ"}   # 借用 ETF 成交量(^NDX 无量)
+FETCH_TK = ["GC=F", "SI=F", "BTC-USD", "^NDX", "GLD", "SLV", "QQQ"]
 
 TOP_TYPES = {"avers_top", "euphoria_top", "growth_top"}
 BOT_TYPES = {"policy_bottom", "crisis_bottom", "capitulation_bottom"}
@@ -24,11 +24,14 @@ HI, LO = 0.8, -0.8
 
 # 策展事件(嵌入,免 pyyaml)。type: *_top / *_bottom / policy_pivot / shock
 EVENTS = [
+    {"id": "silver_top_2011", "date": "2011-04-28", "asset": "silver", "type": "euphoria_top", "trigger": "QE2 弱美元 + 白银投资狂热；COMEX 连续上调保证金刺破", "rotation": "白银 → 现金(两周 -30%)"},
     {"id": "gold_ath_2011", "date": "2011-09-06", "asset": "gold", "type": "avers_top", "trigger": "美债上限危机 + 标普下调美国评级 + 欧债危机", "rotation": "风险 → 黄金/美债"},
     {"id": "btc_top_2017", "date": "2017-12-17", "asset": "btc", "type": "euphoria_top", "trigger": "CME 期货上市 + ICO 狂热顶", "rotation": "法币 → 加密(随后 ~85% 崩)"},
     {"id": "volmageddon_2018", "date": "2018-02-05", "asset": "ndx", "type": "growth_top", "trigger": "通胀升 + 加息担忧 + XIV 做空波动率爆仓", "rotation": "股/短波 → 现金"},
     {"id": "fed_pivot_2018", "date": "2018-12-24", "asset": "ndx", "type": "policy_bottom", "trigger": "鲍威尔转鸽,结束 2015-18 加息周期", "rotation": "现金 → 股(风险重启)"},
+    {"id": "silver_covid_2020", "date": "2020-03-18", "asset": "silver", "type": "crisis_bottom", "trigger": "新冠流动性危机，金银比冲上 ~125 历史极值", "rotation": "一切 → 现金；随后 5 个月翻倍"},
     {"id": "covid_crash_2020", "date": "2020-03-23", "asset": "ndx", "type": "crisis_bottom", "trigger": "新冠冲击 + 美联储无限 QE", "rotation": "一切 → 现金 → 流动性后全面再通胀"},
+    {"id": "silversqueeze_2021", "date": "2021-02-01", "asset": "silver", "type": "shock", "trigger": "Reddit #silversqueeze 散户逼空(GME 外溢)", "rotation": "散户 → 白银 ETF(三日冲高回落)"},
     {"id": "gold_ath_2020", "date": "2020-08-07", "asset": "gold", "type": "avers_top", "trigger": "负实际利率 + 大规模 QE + 弱美元", "rotation": "债/现金 → 黄金"},
     {"id": "btc_top_2021", "date": "2021-11-10", "asset": "btc", "type": "euphoria_top", "trigger": "流动性见顶,taper 临近", "rotation": "顶部派发(巨鲸转入交易所)"},
     {"id": "ndx_top_2021", "date": "2021-11-22", "asset": "ndx", "type": "growth_top", "trigger": "CPI >6%,美联储快速转鹰", "rotation": "成长/ARKK → 价值/现金"},
@@ -40,6 +43,8 @@ EVENTS = [
     {"id": "btc_100k_2024", "date": "2024-12-05", "asset": "btc", "type": "euphoria_top", "trigger": "特朗普胜选 + 亲加密 + 现货 ETF 流入激增", "rotation": "法币/稳定币 → 加密"},
     {"id": "tariff_shock_2025", "date": "2025-04-02", "asset": "ndx", "type": "shock", "trigger": "'解放日'关税 → 暴跌;4/9 暂停 → 历史反弹", "rotation": "股 → 黄金/现金 → 快速再上险"},
     {"id": "dual_euphoria_2025", "date": "2025-10-06", "asset": "btc", "type": "euphoria_top", "trigger": "宽松 + 充裕流动性 + 央行购金/去美元化", "rotation": "疑似分阶段派发(待链上确认)"},
+    {"id": "silver_50_2025", "date": "2025-10-16", "asset": "silver", "type": "shock", "trigger": "伦敦现货挤兑 + 租赁利率飙升，首破 1980/2011 双顶 $50", "rotation": "黄金外溢 → 白银(金银比快速修复)"},
+    {"id": "silver_ath_2026", "date": "2026-01-26", "asset": "silver", "type": "euphoria_top", "trigger": "逼空狂热冲 $115(盘中~$121)；1/30 CME 连续上调保证金刺破", "rotation": "强平连环爆单日 -30%，重演 2011；随后腰斩"},
 ]
 
 

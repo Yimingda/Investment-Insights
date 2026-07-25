@@ -21,7 +21,7 @@ def render():
     st.markdown("## 🎯 宏观流动性与资产历史极值追踪")
     st.markdown(
         '<div style="font-size:12.5px;color:#c9ccd6;line-height:1.7;margin:-4px 0 6px">'
-        '把黄金 / 比特币 / 纳指的**历史大顶大底**,和当时的**成交量异常、风险偏好(RORO)、'
+        '把黄金 / 白银 / 比特币 / 纳指的**历史大顶大底**,和当时的**成交量异常、风险偏好(RORO)、'
         '策展宏观事件**对照起来——看大资金在极值点如何进退。</div>', unsafe_allow_html=True)
     st.markdown(
         '<div class="alert-warn">⚠️ regime 温度计为**运行时因果合成**(价格离均线 + 成交量异常 + '
@@ -121,7 +121,7 @@ def render():
         '<div class="alert-warn" style="font-size:11.5px;line-height:1.7">'
         '<b>诚实边界:</b>① 温度计是运行时因果合成的**描述性温度计**,非本地那套事件研究回测分数;'
         '② 回测结论:该类价格特征对未来回撤**无稳定样本外预测力**,勿当择时信号;'
-        '③ ^NDX 无量 → 借用 QQQ 成交量,黄金借 GLD;④ 2025+ 事件为待核验;⑤ 研究/教育,非投资建议。</div>',
+        '③ ^NDX 无量 → 借用 QQQ 成交量,黄金借 GLD、白银借 SLV;④ 2025+ 事件为待核验;⑤ 研究/教育,非投资建议。</div>',
         unsafe_allow_html=True)
     st.markdown(
         "<div style='text-align:center;font-size:10px;color:#3a3e4a;padding:10px'>"
