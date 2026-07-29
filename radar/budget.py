@@ -24,6 +24,7 @@ WEB_SEARCH_FEE = 0.02     # 精读每次联网检索的粗略附加(token 用量
 _PRICE = {
     "claude-opus-4-8": (5.0, 25.0), "claude-opus-4-7": (5.0, 25.0),
     "claude-opus-4-6": (5.0, 25.0), "claude-sonnet-4-6": (3.0, 15.0),
+    "claude-sonnet-5": (3.0, 15.0),  # intro $2/$10 到 2026-08-31,按目录价保守预留
     "claude-haiku-4-5": (1.0, 5.0),
 }
 

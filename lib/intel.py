@@ -22,6 +22,7 @@ _LOCK = threading.Lock()
 EST_STOCK = 0.40     # 单只个股情报粗估（2次检索+缓存后实测 ~$0.2）
 EST_POLICY = 0.30    # 单个行业政策粗估
 _PRICE = {"claude-opus-4-8": (5.0, 25.0), "claude-sonnet-4-6": (3.0, 15.0),
+          "claude-sonnet-5": (3.0, 15.0),   # intro $2/$10 到 2026-08-31,按目录价保守预留
           "claude-haiku-4-5": (1.0, 5.0)}
 _SEARCH_FEE = 0.02   # 联网检索附加费粗估/次生成
 
@@ -274,11 +275,11 @@ def _model():
         m = st.secrets.get("ANTHROPIC_MODEL", None)
     except Exception:
         m = None
-    m = m or os.environ.get("ANTHROPIC_MODEL") or "claude-sonnet-4-6"
+    m = m or os.environ.get("ANTHROPIC_MODEL") or "claude-sonnet-5"
     # adaptive thinking / web_search_20260209 需 4.6+ 家族；haiku 等旧模型必 400 → 回退 sonnet
-    ok = str(m).startswith(("claude-sonnet-4-6", "claude-opus-4-6", "claude-opus-4-7",
-                            "claude-opus-4-8", "claude-fable"))
-    return m if ok else "claude-sonnet-4-6"
+    ok = str(m).startswith(("claude-sonnet-4-6", "claude-sonnet-5", "claude-opus-4-6",
+                            "claude-opus-4-7", "claude-opus-4-8", "claude-fable"))
+    return m if ok else "claude-sonnet-5"
 
 
 def stock_prompt(code: str, name: str, today: str | None = None) -> str:

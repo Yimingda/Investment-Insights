@@ -154,7 +154,7 @@ def summarize(name: str, articles: list[dict], api_key: str,
     """把某人物近期新闻标题提炼成 2–3 条中文要点；无 key/失败/超预算→None。"""
     if not api_key or not articles:
         return None
-    mdl = model or "claude-sonnet-4-6"           # 默认 Sonnet（短摘要成本很低）
+    mdl = model or "claude-sonnet-5"           # 默认 Sonnet（短摘要成本很低）
     if not budget.reserve(budget.EST_SUMMARY):   # 每日花费保护
         return None
     actual = 0.0

@@ -117,7 +117,7 @@ def warm(plist, show_tw, tw_key, tw_base, show_sum, anth_key):
             if news and cache_get(f"sum:{p['en']}:{_sig(news)}", SUM_TTL) is None:
                 sjobs.append((p, news))
         if sjobs:
-            sum_model = data.secret("ANTHROPIC_MODEL") or "claude-sonnet-4-6"
+            sum_model = data.secret("ANTHROPIC_MODEL") or "claude-sonnet-5"
             with ThreadPoolExecutor(max_workers=4) as ex:
                 futs = {ex.submit(data.summarize, p["name"], news, anth_key, sum_model):
                         f"sum:{p['en']}:{_sig(news)}" for p, news in sjobs}

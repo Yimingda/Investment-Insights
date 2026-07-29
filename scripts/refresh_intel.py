@@ -8,7 +8,7 @@
   5) 云端/本地 app 的 intel._load_all() 自动读取该共享层(本地手动生成仍按较新者优先)。
 
 custom_id 规则(可反解,不依赖 pending 里的映射)：stock-<code> / policy-<N>(N=行业排序序号)。
-环境变量：ANTHROPIC_API_KEY(必填)、ANTHROPIC_MODEL(默认 claude-sonnet-4-6)、
+环境变量：ANTHROPIC_API_KEY(必填)、ANTHROPIC_MODEL(默认 claude-sonnet-5)、
           REFRESH_DAYS(默认 6)、DRY_RUN=1 只打印任务清单、ONLY="policy:银行,stock:600036" 过滤。
 """
 from __future__ import annotations
@@ -27,7 +27,7 @@ from lib.portfolio import DEFAULT_HOLDINGS               # noqa: E402
 
 BASE = os.path.join(ROOT, "data", "intel.json")
 PENDING = os.path.join(ROOT, "data", "intel_pending_batch.json")
-MODEL = os.environ.get("ANTHROPIC_MODEL") or "claude-sonnet-4-6"
+MODEL = os.environ.get("ANTHROPIC_MODEL") or "claude-sonnet-5"
 REFRESH_DAYS = float(os.environ.get("REFRESH_DAYS") or 6)
 POLL_SECS, MAX_WAIT = 60, 55 * 60
 
