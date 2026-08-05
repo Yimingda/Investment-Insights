@@ -16,7 +16,8 @@ import streamlit as st
 
 # 资产 id
 GOLD, CRYPTO, US, ASHARE, FOREX = "gold", "crypto", "us_equity", "a_share", "forex"
-ALL = (GOLD, CRYPTO, US, ASHARE, FOREX)
+NDX = "nasdaq"
+ALL = (GOLD, CRYPTO, US, NDX, ASHARE, FOREX)
 
 
 @dataclass
@@ -56,10 +57,10 @@ def _exchange_events(today: date, end: date) -> list[CalendarEvent]:
     for y, m in _months_in(today, end):
         opex = _nth_weekday(y, m, 4, 3)          # 第三个周五
         if m in (3, 6, 9, 12):
-            out.append(CalendarEvent(opex, "美股季度期权到期（三巫日）", 3, (US, CRYPTO),
+            out.append(CalendarEvent(opex, "美股季度期权到期（三巫日）", 3, (US, NDX, CRYPTO),
                                      "股指期货/期权同时到期，波动放大"))
         else:
-            out.append(CalendarEvent(opex, "美股月度期权到期 (OPEX)", 2, (US,),
+            out.append(CalendarEvent(opex, "美股月度期权到期 (OPEX)", 2, (US, NDX),
                                      "第三个周五，临近常有波动"))
         out.append(CalendarEvent(_last_weekday(y, m, 4), "CME 比特币期货/期权到期", 2, (CRYPTO,),
                                  "每月最后周五结算，注意多空博弈"))
@@ -74,10 +75,10 @@ def _macro_fallback(today: date, end: date) -> list[CalendarEvent]:
     out = []
     for y, m in _months_in(today, end):
         out.append(CalendarEvent(_nth_weekday(y, m, 4, 1), "美国非农就业 (NFP)", 3,
-                                 (GOLD, US, FOREX, CRYPTO), "每月第一个周五，重磅数据"))
+                                 (GOLD, US, NDX, FOREX, CRYPTO), "每月第一个周五，重磅数据"))
         out.append(CalendarEvent(date(y, m, 12), "美国 CPI 通胀数据", 3,
-                                 (GOLD, US, FOREX, CRYPTO), "约每月中旬，重磅"))
-        out.append(CalendarEvent(date(y, m, 27), "美国 PCE 物价指数", 2, (GOLD, US, FOREX),
+                                 (GOLD, US, NDX, FOREX, CRYPTO), "约每月中旬，重磅"))
+        out.append(CalendarEvent(date(y, m, 27), "美国 PCE 物价指数", 2, (GOLD, US, NDX, FOREX),
                                  "美联储关注的通胀指标，约月末"))
         out.append(CalendarEvent(date(y, m, 9), "中国 CPI / PPI", 2, (ASHARE, FOREX),
                                  "约每月9-10日"))
@@ -87,14 +88,14 @@ def _macro_fallback(today: date, end: date) -> list[CalendarEvent]:
     for y in {today.year, end.year}:
         for d0, title, imp, assets, note in [
             (date(y, 3, 5), "中国两会（全国人大开幕）", 3, (ASHARE, FOREX), "政策定调，约3月初"),
-            (date(y, 8, 22), "Jackson Hole 全球央行年会", 2, (GOLD, US, FOREX), "约8月下旬"),
+            (date(y, 8, 22), "Jackson Hole 全球央行年会", 2, (GOLD, US, NDX, FOREX), "约8月下旬"),
         ]:
             out.append(CalendarEvent(d0, title, imp, assets, note))
     return out
 
 
 # ── 主源：Finnhub 财经日历 + 财报日历 ────────────────────────
-_CTY = {"US": ("🇺🇸", (GOLD, US, FOREX, CRYPTO)), "CN": ("🇨🇳", (ASHARE, FOREX)),
+_CTY = {"US": ("🇺🇸", (GOLD, US, NDX, FOREX, CRYPTO)), "CN": ("🇨🇳", (ASHARE, FOREX)),
         "EU": ("🇪🇺", (FOREX,)), "JP": ("🇯🇵", (FOREX,)), "GB": ("🇬🇧", (FOREX,))}
 _KW_CN = [("Interest Rate", "利率决议"), ("Fed", "美联储"), ("FOMC", "FOMC"),
           ("CPI", "CPI通胀"), ("PCE", "PCE物价"), ("PPI", "PPI"), ("GDP", "GDP"),
@@ -154,7 +155,7 @@ def _finnhub(today_iso: str, end_iso: str, api_key: str):
                 d0 = date.fromisoformat(e.get("date"))
             except Exception:
                 continue
-            out.append(CalendarEvent(d0, f"📊 {_MEGACAPS[sym]}({sym}) 财报", 3, (US,),
+            out.append(CalendarEvent(d0, f"📊 {_MEGACAPS[sym]}({sym}) 财报", 3, (US, NDX),
                                      "权重股财报，影响指数", live=True))
     except Exception:
         pass

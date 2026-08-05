@@ -9,6 +9,7 @@ from .base import AssetModule
 from .gold import GoldModule
 from .crypto import CryptoModule
 from .us_equity import USEquityModule
+from .nasdaq import NasdaqModule
 from .a_share import AShareModule
 from .forex import ForexModule
 
@@ -16,6 +17,7 @@ REGISTRY: list[AssetModule] = [
     GoldModule(),
     CryptoModule(),
     USEquityModule(),
+    NasdaqModule(),
     AShareModule(),
     ForexModule(),
 ]
