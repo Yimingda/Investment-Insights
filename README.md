@@ -1,6 +1,6 @@
 # 📊 多品种投资建议面板
 
-基于 Streamlit + Claude AI 的多品种投资监控 Dashboard。一套 UI 渲染多个品种，
+基于 Streamlit + DeepSeek 的多品种投资监控 Dashboard。一套 UI 渲染多个品种，
 数据接入免费实时行情，缺失时自动降级到示例数据，可一键部署到 Streamlit Cloud。
 
 ## 支持品种
@@ -22,7 +22,7 @@
 - 📰 每页展示与该品种相关的实时新闻（A股用 akshare 中文快讯，其余用 Finnhub 分类新闻），并把头条**一并喂给 AI 分析作消息面参考**。
 - 🔔 顶部"全市场实时预警"扫描全部品种的实时阈值信号：跌破均线、RSI 超买/超卖、单日大幅波动——让你在任一页面都能看到其他品种的异动。
 
-**💰 API 花费监控**（顶部"💰 API花费"视图）：调用 Anthropic Cost Admin API 展示你账户的**每日花费趋势**（柱状图）与**消耗结构**（按模型/项目看哪里花得多）。需 `ANTHROPIC_ADMIN_KEY`（`sk-ant-admin...`，Console → Settings → Admin keys，仅组织 admin 可创建；⚠️ 权限大、勿提交）。未配置则显示示例数据 + 接入指引。
+**💰 API 花费监控**（顶部"💰 API花费"视图）：展示 DeepSeek **账户余额**（官方 `/user/balance` 实时）与**每日花费趋势/消耗结构**（本地调用账本口径——DeepSeek 无账户级按日账单 API，账本由 `lib/llm.py` 每次调用后落盘）。未配置 key 则显示示例数据 + 接入指引。
 
 **🔎 A股自选股**（A股 视图内）：输入任意 A股代码（空格/逗号分隔，自动识别沪 `.SS`/深 `.SZ`，yfinance 实时取数），逐只给出现价、综合评分与技术面（趋势 / RSI / 动量 / MACD）+ 一句话建议。⚠️ 评分基于技术面，个股波动大，仅供参考。
 
@@ -35,7 +35,9 @@ lib/                   # 共享基础设施
   indicators.py        # 纯函数：SMA / RSI / 动量 / 回撤
   theme.py             # 暗色主题 CSS + Plotly 图表
   data.py              # yfinance / FRED / akshare / 恐惧贪婪 抓取 + 缓存 + 降级
-  ai.py                # Claude 分析 + 规则引擎降级
+  llm.py               # DeepSeek 统一调用层（JSON 校验重试 + 花费账本）
+  websearch.py         # 轻量检索层（Google News RSS / Jina Reader 正文抓取）
+  ai.py                # DeepSeek 分析 + 规则引擎降级
 assets/                # 各品种模块（实现统一接口）
   base.py              # 品种基类 + 实时/模拟数据工具
   gold.py / crypto.py / us_equity.py / a_share.py / forex.py
@@ -55,8 +57,9 @@ assets/                # 各品种模块（实现统一接口）
 
 ## 智能分析
 
-- 配置了 `ANTHROPIC_API_KEY` → 点击「用 Claude 深度分析」调用 Claude（默认 `claude-opus-4-8`）。
+- 配置了 `DEEPSEEK_API_KEY` → 点击「用 DeepSeek 深度分析」调用 DeepSeek（默认 `deepseek-v4-flash`，可用 `DEEPSEEK_MODEL` 覆盖为 `deepseek-v4-pro`）。
 - 未配置或调用失败 → 自动使用内置**规则引擎**，完全免费、无需联网。
+- 个股情报/行业政策/人物精读原依赖的服务端联网检索，已改为「先检索（Google News RSS / Jina Reader，免费）后生成」两段式。
 
 ## 本地运行
 
@@ -76,7 +79,7 @@ streamlit run app.py
 
 1. `git push` 到 GitHub
 2. [share.streamlit.io](https://share.streamlit.io) → New app → 选仓库与 `app.py` → Deploy
-3. App Settings → Secrets 填写 `ANTHROPIC_API_KEY`（可选 `FINNHUB_API_KEY`、`ANTHROPIC_ADMIN_KEY`、`FRED_API_KEY`、`ANTHROPIC_MODEL`）
+3. App Settings → Secrets 填写 `DEEPSEEK_API_KEY`（可选 `FINNHUB_API_KEY`、`FRED_API_KEY`、`DEEPSEEK_MODEL`）
 
 ## ⚠️ 免责声明
 

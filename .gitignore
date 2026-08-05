@@ -14,6 +14,9 @@ radar/.roster.json
 .intel_ledger.json
 .intel_debug_last.txt
 
+# LLM 调用花费账本（lib/llm.py 落盘，花费页画趋势用）
+.spend_history.json
+
 # Python
 __pycache__/
 *.py[cod]

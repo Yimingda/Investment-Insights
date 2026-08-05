@@ -1,9 +1,9 @@
-"""Anthropic API 花费监控 —— 调用 Cost Admin API 拉取真实花费。
+"""DeepSeek 花费监控 —— 账户余额(官方 API) + 本地调用账本。
 
-接口：GET https://api.anthropic.com/v1/organizations/cost_report
-  - 需 Admin API key（sk-ant-admin...），普通 key 无效；
-  - 按天返回 USD（金额为"分"的十进制字符串，需 /100）；
-  - group_by=description 时结果含解析出的 model 字段。
+DeepSeek 无 Cost Admin API（无法拉账户级别的按日账单），改为两条腿：
+  - 余额：GET https://api.deepseek.com/user/balance（普通 API key 即可）；
+  - 每日趋势/消耗结构：lib/llm.py 每次调用后落盘的本地账本 .spend_history.json
+    （仅统计本部署发起的调用；云端文件系统临时，重启后账本从零开始）。
 无 key/失败一律返回 None，由 UI 改用示例数据 + 配置指引。
 """
 from __future__ import annotations
@@ -13,93 +13,81 @@ from datetime import datetime, timedelta, timezone
 
 import streamlit as st
 
-_COST_URL = "https://api.anthropic.com/v1/organizations/cost_report"
+_BALANCE_URL = "https://api.deepseek.com/user/balance"
 
 
-def is_admin_key(key) -> bool:
-    return bool(key and isinstance(key, str) and key.startswith("sk-ant-admin"))
-
-
-def _to_usd(amount) -> float:
-    """金额为'分'的十进制字符串 → 美元。"""
-    try:
-        return float(amount) / 100.0
-    except Exception:
-        return 0.0
+def has_key(key) -> bool:
+    return bool(key and isinstance(key, str) and key.startswith("sk-"))
 
 
 @st.cache_data(ttl=600, show_spinner=False)
-def cost_report(admin_key: str, days: int = 30):
-    """返回 {daily:[(YYYY-MM-DD, usd)], by_label:{label:usd}, total:usd} 或 None。"""
-    if not is_admin_key(admin_key):
+def balance(api_key: str):
+    """返回 {currency,total,granted,topped_up,available} 或 None。"""
+    if not has_key(api_key):
         return None
     try:
         import requests
     except Exception:
         return None
     try:
-        end = (datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-               + timedelta(days=1))
-        start = end - timedelta(days=days + 1)
-        headers = {"x-api-key": admin_key, "anthropic-version": "2023-06-01",
-                   "User-Agent": "InvestPanel/1.0"}
-        daily: dict[str, float] = {}
-        by_label: dict[str, float] = {}
-        total = 0.0
-        page = None
-        for _ in range(20):  # 分页上限
-            params = {
-                "starting_at": start.strftime("%Y-%m-%dT00:00:00Z"),
-                "ending_at": end.strftime("%Y-%m-%dT00:00:00Z"),
-                "group_by[]": ["description"],
-            }
-            if page:
-                params["page"] = page
-            r = requests.get(_COST_URL, params=params, headers=headers, timeout=15)
-            r.raise_for_status()
-            j = r.json()
-            for bucket in j.get("data", []):
-                day = (bucket.get("starting_at") or "")[:10]
-                for res in bucket.get("results", []):
-                    amt = _to_usd(res.get("amount"))
-                    if amt == 0:
-                        continue
-                    label = (res.get("model") or res.get("description")
-                             or _ws_label(res.get("workspace_id")) or "其他")
-                    daily[day] = daily.get(day, 0.0) + amt
-                    by_label[label] = by_label.get(label, 0.0) + amt
-                    total += amt
-            if j.get("has_more") and j.get("next_page"):
-                page = j["next_page"]
-                continue
-            break
-        if total == 0:
-            return {"daily": [], "by_label": {}, "total": 0.0}
-        return {"daily": sorted(daily.items()), "by_label": by_label, "total": round(total, 2)}
+        r = requests.get(_BALANCE_URL, timeout=10,
+                         headers={"Authorization": f"Bearer {api_key}",
+                                  "User-Agent": "InvestPanel/1.0"})
+        r.raise_for_status()
+        j = r.json() or {}
+        infos = j.get("balance_infos") or []
+        if not infos:
+            return None
+        b = next((x for x in infos if x.get("currency") == "CNY"), infos[0])
+        return {"currency": b.get("currency", ""),
+                "total": float(b.get("total_balance") or 0),
+                "granted": float(b.get("granted_balance") or 0),
+                "topped_up": float(b.get("topped_up_balance") or 0),
+                "available": bool(j.get("is_available"))}
     except Exception:
         return None
 
 
-def _ws_label(ws_id):
-    if ws_id is None:
-        return "默认工作区"
-    return f"工作区 {str(ws_id)[-6:]}"
+def cost_report(days: int = 30):
+    """返回 {daily:[(YYYY-MM-DD, usd)], by_label:{用途:usd}, total:usd} 或 None（无账本）。"""
+    from . import llm
+    hist = llm.spend_history()
+    if not hist:
+        return None
+    cutoff = (datetime.now(timezone.utc).date() - timedelta(days=days - 1)).isoformat()
+    daily: dict[str, float] = {}
+    by_label: dict[str, float] = {}
+    total = 0.0
+    for day, cats in hist.items():
+        if not isinstance(cats, dict) or day < cutoff:
+            continue
+        for label, v in cats.items():
+            try:
+                v = float(v)
+            except Exception:
+                continue
+            daily[day] = daily.get(day, 0.0) + v
+            by_label[label] = by_label.get(label, 0.0) + v
+            total += v
+    if total <= 0:
+        return None
+    return {"daily": sorted(daily.items()), "by_label": by_label, "total": round(total, 4)}
 
 
 def sample_report(days: int = 30):
-    """无 key 时的示例数据，仅用于展示页面布局。"""
+    """无账本时的示例数据，仅用于展示页面布局。"""
     today = datetime.now(timezone.utc).date()
     daily = []
     for i in range(days):
         d = today - timedelta(days=days - 1 - i)
-        v = max(0.0, random.uniform(0.4, 3.2) + (1.5 if d.weekday() < 5 else 0))
-        daily.append((d.strftime("%Y-%m-%d"), round(v, 2)))
+        v = max(0.0, random.uniform(0.005, 0.06) + (0.03 if d.weekday() < 5 else 0))
+        daily.append((d.strftime("%Y-%m-%d"), round(v, 3)))
     total = sum(v for _, v in daily)
     by_label = {
-        "claude-opus-4-8": round(total * 0.55, 2),
-        "claude-sonnet-4-6": round(total * 0.22, 2),
-        "claude-haiku-4-5": round(total * 0.08, 2),
-        "Web Search Usage": round(total * 0.09, 2),
-        "Code Execution Usage": round(total * 0.06, 2),
+        "个股情报": round(total * 0.45, 3),
+        "行情分析": round(total * 0.25, 3),
+        "人物摘要": round(total * 0.15, 3),
+        "人物精读": round(total * 0.10, 3),
+        "行业政策": round(total * 0.05, 3),
     }
-    return {"daily": daily, "by_label": by_label, "total": round(total, 2)}
+    return {"daily": daily, "by_label": by_label, "total": round(total, 3)}

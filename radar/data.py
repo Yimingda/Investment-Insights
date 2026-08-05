@@ -2,7 +2,7 @@
 
   • 新闻/表态/采访  : Google News RSS（免费、无 key、按人名检索最新全球新闻）
   • X(推特) 推文    : twitterapi.io（默认；可在 secrets 配置其它服务的 base/key）
-  • 采访/动态概要    : Claude 摘要（有 ANTHROPIC_API_KEY 才用，否则显示原标题）
+  • 采访/动态概要    : DeepSeek 摘要（有 DEEPSEEK_API_KEY 才用，否则显示原标题）
 """
 from __future__ import annotations
 
@@ -148,85 +148,62 @@ def fetch_tweets(handle: str, api_key: str, limit: int = 5,
             budget.settle(budget.EST_TWEET, 0.0)
 
 
-# ── Claude 摘要（可选）──────────────────────────────────────
+# ── DeepSeek 摘要（可选）────────────────────────────────────
 def summarize(name: str, articles: list[dict], api_key: str,
               model: str | None = None) -> str | None:
     """把某人物近期新闻标题提炼成 2–3 条中文要点；无 key/失败/超预算→None。"""
     if not api_key or not articles:
         return None
-    mdl = model or "claude-sonnet-4-6"           # 默认 Sonnet（短摘要成本很低）
     if not budget.reserve(budget.EST_SUMMARY):   # 每日花费保护
         return None
     actual = 0.0
     try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=api_key)
+        from lib import llm
         heads = "\n".join(f"- {a['title']} ({a['domain']})" for a in articles[:8])
         prompt = (f"以下是关于「{name}」近期的新闻标题。请用中文提炼 2–3 条要点，"
                   f"概括其最新表态 / 动态，每条一句话，聚焦对市场或行业有意义的信息；"
                   f"不要编造标题之外的内容。直接给要点，不要前言：\n{heads}")
-        resp = client.messages.create(
-            model=mdl, max_tokens=400,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        actual = budget.claude_cost(mdl, resp.usage)
-        txt = "".join(getattr(b, "text", "") for b in resp.content
-                      if getattr(b, "type", None) == "text").strip()
-        return txt or None
+        txt, actual = llm.chat(prompt, api_key=api_key, model=model,
+                               max_tokens=400, category="人物摘要")
+        return txt if isinstance(txt, str) and txt != "__AUTH__" else None
     except Exception:
         return None
     finally:
         budget.settle(budget.EST_SUMMARY, actual)   # 按真实 token 结算（失败则退款）
 
 
-# ── 深度解读：让 Claude 用 web_search/web_fetch 联网读原文再提炼 ──
-# Google 新闻链接是加密跳转，本地 requests 抓不到正文；交给 Claude 的
-# 联网工具去找到并通读真实文章，鲁棒性远好于自己爬取。
+# ── 深度解读：Jina Reader 抓原文 → DeepSeek 结构化精读 ──────
+# Google 新闻链接是加密跳转，本地 requests 抓不到正文；Jina Reader(r.jina.ai)
+# 可跟随跳转/渲染 JS 抓到正文。抓不到时降级为「基于标题+相关报道」的弱化版并如实标注。
 def deep_read(name: str, title: str, url: str, api_key: str,
               model: str | None = None) -> str | None:
     if not api_key:
         return None
-    try:
-        import anthropic
-    except Exception:
-        return None
     if not budget.reserve(budget.EST_DEEP):     # 每日花费保护
         return "__BUDGET__"
-    actual = budget.WEB_SEARCH_FEE              # 联网检索粗估(token 用量不含)
+    actual = 0.0
     try:
-        client = anthropic.Anthropic(api_key=api_key)
-        tools = [
-            {"type": "web_search_20260209", "name": "web_search"},
-            {"type": "web_fetch_20260209", "name": "web_fetch"},
-        ]
-        prompt = (
-            f"请联网查找并通读下面这篇文章，然后做结构化精读。\n"
-            f"人物：{name}\n标题：{title}\n链接（可先用 web_fetch 尝试，失败则用 "
-            f"web_search 按标题/人物搜原文）：{url}\n\n"
-            f"读完后用**中文**输出，忠于原文、不要臆造，原文没有的写“原文未提及”：\n"
-            f"**核心观点**：1–2 句\n"
-            f"**为什么 / 主要论据**：3–5 条要点\n"
-            f"**建议 / 如何应对**：2–4 条\n"
-            f"**对市场 / 行业影响**：1–2 句\n"
-            f"最后附 1–3 条来源链接。"
-        )
-        mdl = model or "claude-opus-4-8"
-        messages = [{"role": "user", "content": prompt}]
-        resp = client.messages.create(model=mdl, max_tokens=3000,
-                                      thinking={"type": "adaptive"},
-                                      tools=tools, messages=messages)
-        actual += budget.claude_cost(mdl, resp.usage)
-        # 服务端工具循环：pause_turn 时回传上下文继续，最多 4 次
-        for _ in range(4):
-            if resp.stop_reason != "pause_turn":
-                break
-            messages.append({"role": "assistant", "content": resp.content})
-            resp = client.messages.create(model=mdl, max_tokens=3000,
-                                          thinking={"type": "adaptive"},
-                                          tools=tools, messages=messages)
-            actual += budget.claude_cost(mdl, resp.usage)
-        return "".join(getattr(b, "text", "") for b in resp.content
-                       if getattr(b, "type", None) == "text").strip() or None
+        from lib import llm, websearch
+        fmt = ("用**中文**输出，忠于原文、不要臆造，原文没有的写“原文未提及”：\n"
+               "**核心观点**：1–2 句\n"
+               "**为什么 / 主要论据**：3–5 条要点\n"
+               "**建议 / 如何应对**：2–4 条\n"
+               "**对市场 / 行业影响**：1–2 句")
+        article = websearch.article_text(url)
+        if article:
+            prompt = (f"以下是文章《{title}》（关于 {name}）的正文抓取，请通读后做结构化精读。\n\n"
+                      f"{article}\n\n{fmt}")
+        else:
+            heads = websearch.news(f"{name} {title[:40]}", limit=6, zh=False)
+            ctx = "\n".join(f"- {h['title']}（{h['source']}）" for h in heads) or "（无）"
+            prompt = (f"原文《{title}》（关于 {name}）抓取失败。以下是相关报道标题：\n{ctx}\n\n"
+                      f"请基于标题与你已知的可靠公开信息谨慎解读，开头注明"
+                      f"“⚠️ 原文未能抓取，以下基于标题与相关报道推断”。\n{fmt}")
+        txt, actual = llm.chat(prompt, api_key=api_key, model=model,
+                               max_tokens=3000, category="人物精读")
+        if not isinstance(txt, str) or txt == "__AUTH__":
+            return None
+        return txt or None
     except Exception:
         return None
     finally:
@@ -252,8 +229,7 @@ def wiki_thumb(title: str) -> str:
         return ""
 
 
-def anthropic_key() -> str | None:
-    k = secret("ANTHROPIC_API_KEY")
-    if k and isinstance(k, str) and k.startswith("sk-ant-") and "xxxx" not in k:
-        return k
-    return None
+def llm_key() -> str | None:
+    """DeepSeek key（摘要/精读用）。无效/未配置 → None，功能自动降级。"""
+    from lib import llm
+    return llm.deepseek_key()

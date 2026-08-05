@@ -17,8 +17,8 @@ pyarrow>=14.0.0,<25    # 行情快照 parquet(lib/snapshot.py)
 requests>=2.31.0
 # 实时行情：股票/ETF/外汇/加密/期货/指数（含 A股指数 000300.SS 等）
 yfinance>=0.2.40
-# 智能分析（可选；无 key 时自动降级到规则引擎）
-anthropic>=0.40.0
+# 智能分析（可选；无 key 时自动降级到规则引擎）—— DeepSeek OpenAI 兼容端点
+openai>=1.30.0
 
 # ── 可选增强（不默认安装）──────────────────────────────────
 # akshare：A股北向资金 / 中文财经快讯增强。依赖较重（含需编译的 mini-racer），

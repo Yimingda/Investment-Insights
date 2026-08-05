@@ -1,6 +1,8 @@
 """个股深度情报 —— 决策日历 / 最新财报分析 / 半年大事 / 行业政策累计。
 
-- 内容型数据由 Claude + 联网搜索生成（手动按钮触发），结果存盘 .intel.json 复用。
+- 内容型数据由 DeepSeek 生成（手动按钮触发），结果存盘 .intel.json 复用。
+  检索材料由 lib/websearch.py 先行抓取（Google News RSS）再拼进 prompt ——
+  DeepSeek API 无服务端联网检索，改为「先检索、后生成」两段式。
 - 政策按行业归组（12 只 → 9 个行业），同行业共享一份，省生成费用。
 - 独立每日预算 INTEL_BUDGET_USD（默认 $1.00），与人物雷达的预算分开记账。
 - 财报披露日等有法定窗口的，用 rule_calendar() 免费兜底（不依赖 AI）。
@@ -19,11 +21,8 @@ _BASE_PATH = os.path.join(_DIR, "data", "intel.json")     # 夜间批量刷新�
 _LEDGER = os.path.join(_DIR, ".intel_ledger.json")
 _LOCK = threading.Lock()
 
-EST_STOCK = 0.40     # 单只个股情报粗估（2次检索+缓存后实测 ~$0.2）
-EST_POLICY = 0.30    # 单个行业政策粗估
-_PRICE = {"claude-opus-4-8": (5.0, 25.0), "claude-sonnet-4-6": (3.0, 15.0),
-          "claude-haiku-4-5": (1.0, 5.0)}
-_SEARCH_FEE = 0.02   # 联网检索附加费粗估/次生成
+EST_STOCK = 0.03     # 单只个股情报粗估（DeepSeek v4-flash，检索走免费 RSS）
+EST_POLICY = 0.02    # 单个行业政策粗估
 
 # ── 行业归组（政策共享粒度）─────────────────────────────────
 INDUSTRY_OF = {
@@ -97,19 +96,6 @@ def _settle(est: float, actual: float):
         d = _ledger_load()
         d["spent"] = max(0.0, d["spent"] - est + max(0.0, actual))
         _ledger_save(d)
-
-
-def _cost(model: str, usage) -> float:
-    """真实花费。input_tokens 只是未缓存余量——缓存写 1.25×、缓存读 0.1× 必须计入，
-    否则开启 prompt caching 后账本会系统性低估(预算护栏失真)。"""
-    pin, pout = _PRICE.get(model, (5.0, 25.0))
-    try:
-        cw = getattr(usage, "cache_creation_input_tokens", 0) or 0
-        cr = getattr(usage, "cache_read_input_tokens", 0) or 0
-        return (usage.input_tokens * pin + cw * pin * 1.25 + cr * pin * 0.10
-                + usage.output_tokens * pout) / 1e6
-    except Exception:
-        return 0.0
 
 
 def _dump_debug(txt: str | None):
@@ -210,10 +196,9 @@ def rule_calendar(code: str, today: date | None = None) -> list[dict]:
     return out[:3]
 
 
-# ── Claude 联网生成 ─────────────────────────────────────────
-_LAST_FAIL = ""     # 诊断：最近一次 _call_web 失败原因（写进 .intel_debug_last.txt）
+# ── DeepSeek 生成（检索材料先行，见 lib/websearch.py）────────
+# 输出 schema —— DeepSeek 只保证合法 JSON，结构对齐靠 llm.chat 内嵌提示 + 校验重试
 
-# 结构化输出 schema —— API 保证输出严格符合（所有 object 必须 additionalProperties:false）
 _STOCK_SCHEMA = {
     "type": "object",
     "properties": {
@@ -268,187 +253,35 @@ _POLICY_SCHEMA = {
     "required": ["items"],
     "additionalProperties": False,
 }
-def _model():
-    try:
-        import streamlit as st
-        m = st.secrets.get("ANTHROPIC_MODEL", None)
-    except Exception:
-        m = None
-    m = m or os.environ.get("ANTHROPIC_MODEL") or "claude-sonnet-4-6"
-    # adaptive thinking / web_search_20260209 需 4.6+ 家族；haiku 等旧模型必 400 → 回退 sonnet
-    ok = str(m).startswith(("claude-sonnet-4-6", "claude-opus-4-6", "claude-opus-4-7",
-                            "claude-opus-4-8", "claude-fable"))
-    return m if ok else "claude-sonnet-4-6"
+def stock_prompt(code: str, name: str, material: str = "", today: str | None = None) -> str:
+    """个股情报生成 prompt（交互与夜间批量共用同一份，保证口径一致）。
 
-
-def stock_prompt(code: str, name: str, today: str | None = None) -> str:
-    """个股情报生成 prompt（交互与夜间批量共用同一份，保证口径一致）。"""
+    material：websearch.stock_material() 拼好的检索材料（新闻标题+日期）；空则如实降级。"""
     today = today or date.today().isoformat()
-    return f"""请联网搜索 A 股上市公司「{name}（{code}）」的最新信息（今天是 {today}），完成三项任务后，只输出一个 JSON（中文内容，不要输出 JSON 以外的任何文字）：
+    mat = material.strip() or "（本次未取到任何检索材料）"
+    return f"""你是严谨的 A 股研究助理。今天是 {today}。以下是关于上市公司「{name}（{code}）」的最新检索材料（新闻标题与日期，可能不全）：
+
+{mat}
+
+请结合上述材料与你已知的可靠公开信息，完成三项任务，只输出一个 JSON（中文内容，不要输出 JSON 以外的任何文字）：
 
 1. calendar：未来 1-6 个月内影响“加仓/减仓/持有”决策的关键事件（3-6 条）：财报披露、分红除权、股东大会、限售解禁、重要产品/订单/行业节点等。确切日期填 date(YYYY-MM-DD)，不确定的 date 填 ""、只填 when（如"8月下旬"）。
 2. earnings：最新一期已披露财报（写明哪一期）的分析：营收与净利同比、关键利润率变化、超/低于预期、2-4 条核心亮点、2-3 条风险、一句话结论 verdict（利多/中性/利空 开头）。
 3. events：过去 6 个月对股价有实际影响的大事（5-8 条，按时间倒序）：公告、订单、政策冲击、管理层/股权变动等；impact 用 "+"（利多）/"-"（利空）/"0"（中性）。
-所有信息须来自真实检索结果，不确定就不写，禁止编造日期。最多检索 2 次，检索后立即输出结果。"""
+材料中没有且你不确定的就不写，禁止编造日期与数字。"""
 
 
-def policy_prompt(industry: str, today: str | None = None) -> str:
+def policy_prompt(industry: str, material: str = "", today: str | None = None) -> str:
     """行业政策生成 prompt（交互与夜间批量共用）。"""
     today = today or date.today().isoformat()
-    return f"""请联网搜索中国「{industry}」行业近 12 个月（今天是 {today}）出台或持续生效的重要政策/监管动向，对 A 股该行业股价有实际影响的（6-10 条，按时间倒序）。只输出一个 JSON，不要其它文字：
+    mat = material.strip() or "（本次未取到任何检索材料）"
+    return f"""你是严谨的 A 股研究助理。今天是 {today}。以下是关于中国「{industry}」行业政策/监管动向的最新检索材料（新闻标题与日期，可能不全）：
+
+{mat}
+
+请结合上述材料与你已知的可靠公开信息，整理近 12 个月出台或持续生效、对 A 股该行业股价有实际影响的重要政策/监管动向（6-10 条，按时间倒序）。只输出一个 JSON，不要其它文字：
 {{"items":[{{"date":"YYYY-MM","policy":"政策/文件/动向(≤40字)","direction":"利多/利空/中性","impact":"对行业股价的影响机制(≤40字)"}}]}}
-所有条目须来自真实检索结果，不确定就不写，禁止编造。最多检索 2 次，检索后立即输出结果。"""
-
-
-def _call_web(prompt: str, api_key: str, max_tokens: int = 6000,
-              max_searches: int = 2, schema: dict | None = None) -> tuple[str | None, float]:
-    """带 web_search 的单次任务调用（pause_turn 循环）。返回 (文本, 实际花费)。
-
-    成本护栏（实测教训：无限制搜索一次能烧 $1.8+）：
-      - max_uses 硬限制检索次数；
-      - pause_turn 最多续 4 次；续传耗尽仍未完成 → 判失败（收尾文本是半成品）；
-      - stop_reason=max_tokens 视为失败（输出被截断）。
-    可靠性：传 schema 时启用结构化输出(output_config.format json_schema)，
-    API 层面保证返回合法 JSON —— 根治围栏/截断/串内裸引号等解析失败。"""
-    global _LAST_FAIL
-    import anthropic
-    client = anthropic.Anthropic(api_key=api_key)
-    tools = [{"type": "web_search_20260209", "name": "web_search",
-              "max_uses": max_searches}]
-    mdl = _model()
-    kw = {}
-    if schema is not None:
-        kw["output_config"] = {"format": {"type": "json_schema", "schema": schema}}
-    actual = _SEARCH_FEE * max_searches
-    messages = [{"role": "user", "content": prompt}]
-    _LAST_FAIL = ""
-    # 不向外抛异常：中途失败也要把已产生的 actual 带回去结算（否则账本漏记真实花费）
-    # cache_control: 续传轮重发全部上下文(含检索结果)，提示词缓存把重发部分降到 1/10 价
-    try:
-        resp = client.messages.create(model=mdl, max_tokens=max_tokens,
-                                      thinking={"type": "adaptive"},
-                                      cache_control={"type": "ephemeral"},
-                                      tools=tools, messages=messages, **kw)
-        actual += _cost(mdl, resp.usage)
-        for _ in range(6):
-            if resp.stop_reason != "pause_turn":
-                break
-            messages.append({"role": "assistant", "content": resp.content})
-            resp = client.messages.create(model=mdl, max_tokens=max_tokens,
-                                          thinking={"type": "adaptive"},
-                                          cache_control={"type": "ephemeral"},
-                                          tools=tools, messages=messages, **kw)
-            actual += _cost(mdl, resp.usage)
-    except anthropic.AuthenticationError:
-        _LAST_FAIL = "auth"
-        return "__AUTH__", actual
-    except Exception as e:
-        _LAST_FAIL = f"exception:{type(e).__name__}:{str(e)[:180]}"
-        return None, actual
-    if resp.stop_reason in ("max_tokens", "pause_turn"):   # 截断/未完成 → 文本必是半成品
-        _LAST_FAIL = f"stop:{resp.stop_reason}(out={resp.usage.output_tokens})"
-        return None, actual
-    texts = [b.text for b in resp.content
-             if getattr(b, "type", None) == "text" and getattr(b, "text", "").strip()]
-    if not texts:
-        _LAST_FAIL = f"no_text(stop={resp.stop_reason})"
-        return None, actual
-    # 结构化输出时最终答案在最后一个 text 块（前面可能是检索间的叙述）
-    txt = texts[-1].strip() if schema is not None else "\n".join(texts).strip()
-    return (txt or None), actual
-
-
-def _close_brackets(s: str) -> str:
-    """自动补全未闭合的引号/括号（模型偶发 end_turn 时 JSON 尾部没写完）。"""
-    stack, instr, escp = [], False, False
-    for ch in s:
-        if instr:
-            if escp:
-                escp = False
-            elif ch == "\\":
-                escp = True
-            elif ch == '"':
-                instr = False
-        else:
-            if ch == '"':
-                instr = True
-            elif ch in "{[":
-                stack.append(ch)
-            elif ch in "}]":
-                if stack:
-                    stack.pop()
-    if instr:
-        s += '"'
-    s = s.rstrip().rstrip(",")          # 尾逗号会让补全后的 JSON 非法
-    for ch in reversed(stack):
-        s += "}" if ch == "{" else "]"
-    return s
-
-
-def _escape_inner_quotes(s: str) -> str:
-    """转义字符串值内部未转义的英文双引号（实测：模型写出 `央行"双降"落地` 之类）。
-
-    判定：串内遇到 `"` 时看其后第一个非空白字符——是 , : } ] 或结尾 → 真正的收尾引号；
-    否则视为内容引号，转义为 \\"。"""
-    out, instr, escp, n = [], False, False, len(s)
-    for idx, ch in enumerate(s):
-        if not instr:
-            if ch == '"':
-                instr = True
-            out.append(ch)
-            continue
-        if escp:
-            out.append(ch)
-            escp = False
-            continue
-        if ch == "\\":
-            out.append(ch)
-            escp = True
-            continue
-        if ch == '"':
-            k = idx + 1
-            while k < n and s[k] in " \t\r\n":
-                k += 1
-            if k >= n or s[k] in ",:}]":
-                instr = False
-                out.append(ch)
-            else:
-                out.append('\\"')
-        else:
-            out.append(ch)
-    return "".join(out)
-
-
-def _parse_json(txt: str) -> dict | None:
-    """从模型输出里稳健地抠出 JSON（容忍围栏/前后缀/尾部截断/串内裸引号）。"""
-    if not txt:
-        return None
-    s = txt.strip()
-    if "```" in s:
-        for seg in s.split("```"):
-            seg = seg.strip()
-            if seg.startswith("json"):
-                seg = seg[4:].strip()
-            if seg.startswith("{"):
-                s = seg
-                break
-    i = s.find("{")
-    if i < 0:
-        return None
-    s = s[i:]
-    j = s.rfind("}")
-    cands = ([s[:j + 1]] if j > 0 else []) + [_close_brackets(s)]
-    if j > 0:
-        cands.append(_close_brackets(s[:j + 1]))
-    for c in cands:
-        for attempt in (c, _escape_inner_quotes(c)):
-            try:
-                d = json.loads(attempt)
-                if isinstance(d, dict):
-                    return d
-            except Exception:
-                continue
-    return None
+材料中没有且你不确定的就不写，禁止编造。"""
 
 
 def build_stock_rec(d: dict) -> dict:
@@ -476,21 +309,15 @@ def gen_stock(code: str, name: str, api_key: str) -> dict | str | None:
     if not _reserve(EST_STOCK):
         return "__BUDGET__"
     actual = 0.0
-    prompt = stock_prompt(str(code), name)
     try:
-        # max_tokens 必须给足：web_search 动态过滤的检索编排/代码执行全都计入输出 token，
-        # 实测一次 3 检索任务光编排就 ~6k，给小了(5-6k)模型还没写 JSON 就被截断
-        d = None
-        for attempt in (1, 2):     # 瞬时失败(网络抖动/续传超限)自动重试一次
-            txt, a = _call_web(prompt, api_key, max_tokens=16000, schema=_STOCK_SCHEMA)
-            actual += a
-            if txt == "__AUTH__":
-                return "__AUTH__"
-            d = _parse_json(txt)
-            if d:
-                break
-            _dump_debug(txt or f"(空) fail={_LAST_FAIL} (attempt {attempt})")
-        if not d:
+        from . import llm, websearch
+        prompt = stock_prompt(str(code), name, websearch.stock_material(str(code), name))
+        d, actual = llm.chat(prompt, api_key=api_key, max_tokens=8000,
+                             schema=_STOCK_SCHEMA, category="个股情报")
+        if d == "__AUTH__":
+            return "__AUTH__"
+        if not isinstance(d, dict):
+            _dump_debug(f"(生成失败) fail={llm.LAST_FAIL}")
             return None
         rec = build_stock_rec(d)
         _put("stocks", str(code), rec)
@@ -511,19 +338,15 @@ def gen_policy(industry: str, api_key: str) -> dict | str | None:
     if not _reserve(EST_POLICY):
         return "__BUDGET__"
     actual = 0.0
-    prompt = policy_prompt(industry)
     try:
-        d = None
-        for attempt in (1, 2):     # 瞬时失败自动重试一次
-            txt, a = _call_web(prompt, api_key, max_tokens=12000, schema=_POLICY_SCHEMA)
-            actual += a
-            if txt == "__AUTH__":
-                return "__AUTH__"
-            d = _parse_json(txt)
-            if d:
-                break
-            _dump_debug(txt or f"(空) fail={_LAST_FAIL} (attempt {attempt})")
-        if not d:
+        from . import llm, websearch
+        prompt = policy_prompt(industry, websearch.policy_material(industry))
+        d, actual = llm.chat(prompt, api_key=api_key, max_tokens=6000,
+                             schema=_POLICY_SCHEMA, category="行业政策")
+        if d == "__AUTH__":
+            return "__AUTH__"
+        if not isinstance(d, dict):
+            _dump_debug(f"(生成失败) fail={llm.LAST_FAIL}")
             return None
         rec = build_policy_rec(d)
         _put("policies", industry, rec)

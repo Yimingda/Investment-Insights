@@ -117,7 +117,7 @@ def warm(plist, show_tw, tw_key, tw_base, show_sum, anth_key):
             if news and cache_get(f"sum:{p['en']}:{_sig(news)}", SUM_TTL) is None:
                 sjobs.append((p, news))
         if sjobs:
-            sum_model = data.secret("ANTHROPIC_MODEL") or "claude-sonnet-4-6"
+            sum_model = data.secret("DEEPSEEK_MODEL")   # None → llm 层默认 v4-flash
             with ThreadPoolExecutor(max_workers=4) as ex:
                 futs = {ex.submit(data.summarize, p["name"], news, anth_key, sum_model):
                         f"sum:{p['en']}:{_sig(news)}" for p, news in sjobs}
@@ -168,7 +168,7 @@ def deep_expander(p, news, anth_key, scope="grid"):
         if not news:
             st.caption("暂无文章可精读。")
         elif not anth_key:
-            st.caption("需配置 ANTHROPIC_API_KEY 才能精读（secrets.toml）。")
+            st.caption("需配置 DEEPSEEK_API_KEY 才能精读（secrets.toml）。")
         else:
             opts = list(range(len(news[:5])))
             idx = st.selectbox("选择要精读的文章", opts,
@@ -181,7 +181,7 @@ def deep_expander(p, news, anth_key, scope="grid"):
                     with st.spinner("联网读原文并解读中（约 10–30 秒）…"):
                         res = data.deep_read(p["name"], news[idx]["title"],
                                              news[idx]["url"], anth_key,
-                                             model=data.secret("ANTHROPIC_MODEL"))
+                                             model=data.secret("DEEPSEEK_MODEL"))
                         if res and res != "__BUDGET__":      # 预算阻断不缓存
                             cache_put(ck, res)
                 st.session_state[f"deepres_{p['en']}"] = (news[idx]["title"], res or "__FAIL__")
@@ -437,7 +437,7 @@ def render():
 
     tw_key = data.secret("TWITTERAPI_KEY")
     tw_base = data.secret("TWITTER_API_BASE")  # 换其它服务时配置
-    anth_key = data.anthropic_key()
+    anth_key = data.llm_key()      # DeepSeek key（变量名沿用，含义为 LLM key）
     budget.set_cap(data.secret("DAILY_BUDGET_USD", 0.20))   # 每日花费上限(USD)
 
     # 开页：把本地快照载入会话缓存（仅一次）→ 默认展示本地数据

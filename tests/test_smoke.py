@@ -82,11 +82,23 @@ def main():
     # 跨品种阈值预警扫描（离线 → 空列表，不报错）
     scanned = alerts.scan(REGISTRY)
     assert isinstance(scanned, list)
-    # API 花费：无 admin key → None（降级示例）；示例数据结构正确
-    assert usage.cost_report(None) is None
-    assert usage.is_admin_key("sk-ant-admin01-xyz") and not usage.is_admin_key("sk-ant-api-xyz")
+    # API 花费：离线无 key → 余额 None；账本报告 None 或结构正确；示例数据结构正确
+    assert usage.balance(None) is None
+    assert usage.has_key("sk-abc123") and not usage.has_key("") and not usage.has_key(None)
+    rep = usage.cost_report(30)
+    assert rep is None or (rep["daily"] and rep["total"] > 0)
     samp = usage.sample_report(30)
     assert samp["daily"] and samp["by_label"] and samp["total"] > 0
+    # LLM 层：离线/无 key → 优雅降级，不抛异常
+    from lib import llm, websearch
+    websearch._req = lambda: None                         # 强制离线（同 data._requests）
+    assert llm.deepseek_key() is None
+    out, cost = llm.chat("测试", category="测试")
+    assert out is None and cost == 0.0
+    assert llm.parse_json('{"a":1') == {"a": 1}          # 截断修复
+    assert websearch.news("test") == []                   # 离线 → 空
+    assert websearch.stock_material("600036", "招商银行") == ""
+    assert websearch.article_text("http://example.com") == ""
     # A股个股：代码→ticker 解析 + 离线 analyze 降级
     assert stocks.to_ticker("600519") == "600519.SS"
     assert stocks.to_ticker("000858") == "000858.SZ"

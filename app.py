@@ -2,7 +2,7 @@
 
 一套 UI 渲染多个品种（黄金 / 加密 / 美股 / A股），每个品种是一个 assets 模块。
 数据：yfinance / FRED / akshare（缺失则降级示例数据）。
-分析：有 ANTHROPIC_API_KEY 用 Claude，否则用规则引擎。
+分析：有 DEEPSEEK_API_KEY 用 DeepSeek（lib/llm.py），否则用规则引擎。
 """
 import faulthandler
 faulthandler.enable()   # 原生库段错误时把崩溃栈打进日志（云端排查 Segmentation fault 用）
@@ -61,41 +61,46 @@ _check_auth()
 
 
 # ── 工具 ─────────────────────────────────────────────────────
-def anthropic_key() -> str | None:
-    k = data.secret("ANTHROPIC_API_KEY")
-    if k and isinstance(k, str) and k.startswith("sk-ant-") and "xxxx" not in k:
+def llm_key() -> str | None:
+    k = data.secret("DEEPSEEK_API_KEY")
+    if k and isinstance(k, str) and k.startswith("sk-") and "xxxx" not in k:
         return k
     return None
 
 
 def render_cost_page():
-    """💰 API 花费监控页：Anthropic Cost Admin API 的趋势 + 消耗结构。"""
+    """💰 API 花费监控页：DeepSeek 账户余额 + 本地调用账本的趋势/结构。"""
     st.markdown("## 💰 API 花费监控")
-    admin = data.secret("ANTHROPIC_ADMIN_KEY")
-    valid = usage.is_admin_key(admin)
+    key = llm_key()
     days = st.radio("时间范围", [7, 30, 90], index=1, horizontal=True,
                     format_func=lambda d: f"近 {d} 天", label_visibility="collapsed")
 
-    rep = usage.cost_report(admin, days) if valid else None
+    bal = usage.balance(key) if key else None
+    rep = usage.cost_report(days)
     is_sample = rep is None
     if rep is None:
         rep = usage.sample_report(days)
 
     if is_sample:
-        st.markdown('<div class="alert-warn">⚠️ 当前为<b>示例数据</b>（未配置有效 ANTHROPIC_ADMIN_KEY）。'
-                    '配置后将显示你账户的真实花费。</div>', unsafe_allow_html=True)
+        st.markdown('<div class="alert-warn">⚠️ 当前趋势为<b>示例数据</b>（本地账本暂无记录——'
+                    '配置 DEEPSEEK_API_KEY 并使用 AI 功能后自动累积）。</div>',
+                    unsafe_allow_html=True)
 
     daily = rep["daily"]
     by = rep["by_label"]
     total = rep["total"]
     avg = total / max(1, len(daily))
-    mx = max((v for _, v in daily), default=0.0)
     top = max(by.items(), key=lambda kv: kv[1]) if by else ("-", 0.0)
 
     k1, k2, k3, k4 = st.columns(4)
-    k1.metric(f"近{days}天总花费", f"${total:,.2f}")
-    k2.metric("日均花费", f"${avg:,.2f}")
-    k3.metric("最大单日", f"${mx:,.2f}")
+    if bal:
+        cur = "¥" if bal["currency"] == "CNY" else "$"
+        k1.metric("账户余额", f"{cur}{bal['total']:,.2f}",
+                  f"含赠送 {cur}{bal['granted']:,.2f}" if bal["granted"] else "官方实时")
+    else:
+        k1.metric("账户余额", "未配置 key" if not key else "获取失败")
+    k2.metric(f"近{days}天总花费(账本)", f"${total:,.2f}")
+    k3.metric("日均花费", f"${avg:,.3f}")
     k4.metric("最大消耗项", top[0], f"${top[1]:,.2f}")
 
     c1, c2 = st.columns([3, 2])
@@ -131,13 +136,15 @@ def render_cost_page():
         st.markdown(
             '<div class="card"><div class="card-title">如何接入真实花费</div>'
             '<div style="font-size:12px;line-height:1.8;color:#c9ccd6">'
-            '1. 打开 <b>Claude Console → Settings → Admin keys</b>（需组织 admin 角色），创建 Admin API key（<code>sk-ant-admin...</code>）。<br>'
-            '2. 填入 <code>.streamlit/secrets.toml</code>：<code>ANTHROPIC_ADMIN_KEY = "sk-ant-admin..."</code>（已 .gitignore，不会提交）。<br>'
-            '3. 刷新本页即可看到真实花费趋势与消耗结构。<br>'
-            '<span style="color:#e08030">⚠️ Admin key 权限较大，请妥善保管、切勿提交到代码库。个人账户需先在 Console 建立组织。</span>'
+            '1. 打开 <b>platform.deepseek.com → API Keys</b>，创建 API key（<code>sk-...</code>）。<br>'
+            '2. 填入 <code>.streamlit/secrets.toml</code>：<code>DEEPSEEK_API_KEY = "sk-..."</code>（已 .gitignore，不会提交）。<br>'
+            '3. 顶部余额立即可见；趋势/结构在使用 AI 功能后由本地账本自动累积。<br>'
+            '<span style="color:#e08030">⚠️ DeepSeek 无账户级按日账单 API——趋势为本地账本口径，'
+            '仅统计本部署发起的调用（云端重启后从零累积）。</span>'
             '</div></div>', unsafe_allow_html=True)
     st.markdown("""<div style='text-align:center;font-size:10px;color:#3a3e4a;padding:8px'>
-    数据来自 Anthropic Cost Admin API（约 5 分钟延迟）· 金额为美元</div>""", unsafe_allow_html=True)
+    余额来自 DeepSeek /user/balance · 趋势为本地账本 · 金额为美元（余额按账户币种）</div>""",
+                unsafe_allow_html=True)
 
 
 def render_stock_watchlist():
@@ -229,7 +236,7 @@ def _intel_tabs(r: dict, a: dict):
     rec = intel.get_stock(code)
     ind = intel.industry_of(code)
     pol = intel.get_policy(ind)
-    key = anthropic_key()
+    key = llm_key()
 
     top_a, top_b = st.columns([2.2, 1])
     top_a.caption(f"个股情报更新：{intel.age_str(rec.get('generated_at') if rec else None)} · "
@@ -241,13 +248,13 @@ def _intel_tabs(r: dict, a: dict):
         if res == "__BUDGET__":
             st.warning(f"今日情报预算 ${intel.budget_cap():.2f} 已用尽（secrets 里 INTEL_BUDGET_USD 可调）。")
         elif res == "__AUTH__":
-            st.error("ANTHROPIC_API_KEY 无效或已被吊销 —— 请检查 secrets 配置。")
+            st.error("DEEPSEEK_API_KEY 无效或已被吊销 —— 请检查 secrets 配置。")
         elif res is None:
             st.error("生成失败（网络/解析问题），请稍后重试。")
         else:
             st.rerun()
     if not key:
-        st.caption("⚠️ 未配置 ANTHROPIC_API_KEY，无法联网生成；仅显示规则日历。")
+        st.caption("⚠️ 未配置 DEEPSEEK_API_KEY，无法生成情报；仅显示规则日历。")
 
     t1, t2, t3, t4 = st.tabs(["📅 决策日历", "📑 最新财报", "🗓️ 半年大事", "🏛️ 行业政策"])
 
@@ -309,7 +316,7 @@ def _intel_tabs(r: dict, a: dict):
             if res == "__BUDGET__":
                 st.warning("今日情报预算已用尽。")
             elif res == "__AUTH__":
-                st.error("ANTHROPIC_API_KEY 无效或已被吊销 —— 请检查 secrets 配置。")
+                st.error("DEEPSEEK_API_KEY 无效或已被吊销 —— 请检查 secrets 配置。")
             elif res is None:
                 st.error("生成失败，请稍后重试。")
             else:
@@ -635,7 +642,7 @@ snap = module.build_snapshot(refresh=do_refresh)
 libs = data.libs_status()
 dot = "live-dot" if snap.data_live else "sim-dot"
 lib_tags = " · ".join(f"{n}{'✅' if ok else '❌'}" for n, ok in libs.items())
-key_ok = "Claude✅" if anthropic_key() else "Claude（未配置key，用规则引擎）"
+key_ok = "DeepSeek✅" if llm_key() else "DeepSeek（未配置key，用规则引擎）"
 st.markdown(
     f"<div style='font-size:11px;color:#5a6070;margin:2px 0 6px'>"
     f"<span class='{dot}'></span>{snap.source_note} · 数据库：{lib_tags} · {key_ok} · "
@@ -717,7 +724,7 @@ with strat_col:
 
 with ai_col:
     st.markdown('<div class="card"><div class="card-title">🤖 智能行情分析</div>', unsafe_allow_html=True)
-    key = anthropic_key()
+    key = llm_key()
     cache_key = f"_ai_{asset_id}"
 
     b1, b2 = st.columns(2)
@@ -725,20 +732,20 @@ with ai_col:
         if st.button("🔄 重新分析", width="stretch", key=f"re_{asset_id}"):
             st.session_state.pop(cache_key, None)
     with b2:
-        force_claude = st.button("🤖 用 Claude 深度分析", width="stretch",
+        force_claude = st.button("🤖 用 DeepSeek 深度分析", width="stretch",
                                  key=f"cl_{asset_id}", disabled=key is None)
 
     if force_claude and key:
-        with st.spinner("Claude 分析中…"):
+        with st.spinner("DeepSeek 分析中…"):
             st.session_state[cache_key] = ai.analyze(
                 module.name, snap, api_key=key,
-                model=data.secret("ANTHROPIC_MODEL"), news=news_titles)
+                model=data.secret("DEEPSEEK_MODEL"), news=news_titles)
     elif cache_key not in st.session_state:
-        # 默认即时显示（无 key 用规则引擎；不主动消耗 Claude 额度）
+        # 默认即时显示（无 key 用规则引擎；不主动消耗 API 额度）
         st.session_state[cache_key] = ai.analyze(module.name, snap, news=news_titles)
 
     situation, risks, advice, by_claude = st.session_state[cache_key]
-    badge = ("<span class='badge badge-up'>Claude AI</span>" if by_claude
+    badge = ("<span class='badge badge-up'>DeepSeek AI</span>" if by_claude
              else "<span class='badge badge-neu'>规则引擎</span>")
     st.markdown(f"分析来源：{badge}", unsafe_allow_html=True)
     st.markdown("**当前形势**"); st.markdown(situation)

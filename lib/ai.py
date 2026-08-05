@@ -1,14 +1,11 @@
-"""智能分析层：有 Anthropic API key 就调用 Claude，否则降级到规则引擎。
+"""智能分析层：有 DeepSeek API key 就调用 DeepSeek，否则降级到规则引擎。
 
-对外只暴露 analyze()，返回 (当前形势, 主要风险, 投资者建议, 是否由Claude生成)。
+对外只暴露 analyze()，返回 (当前形势, 主要风险, 投资者建议, 是否由AI生成)。
+模型/端点/JSON 可靠性处理统一收口在 lib/llm.py。
 """
 from __future__ import annotations
 
 from .model import Snapshot
-
-# 默认模型：Claude Opus 4.8（最强）。可在 secrets 用 ANTHROPIC_MODEL 覆盖为
-# claude-sonnet-4-6 / claude-haiku-4-5 等以控制成本。
-DEFAULT_MODEL = "claude-opus-4-8"
 
 _SYSTEM = (
     "你是一位严谨的中文投资分析师，服务于一个多品种行情监控面板。"
@@ -36,37 +33,25 @@ def analyze(asset_name: str, snap: Snapshot, api_key: str | None = None,
             model: str | None = None,
             news: list[str] | None = None) -> tuple[str, str, str, bool]:
     if api_key:
-        out = _claude_analyze(asset_name, snap, api_key, model or DEFAULT_MODEL, news)
+        out = _llm_analyze(asset_name, snap, api_key, model, news)
         if out is not None:
             return out[0], out[1], out[2], True
     s, r, a = _rule_based(asset_name, snap, news)
     return s, r, a, False
 
 
-# ── Claude 实现 ──────────────────────────────────────────────
-def _claude_analyze(asset_name: str, snap: Snapshot, api_key: str, model: str,
-                    news: list[str] | None = None):
+# ── DeepSeek 实现 ────────────────────────────────────────────
+def _llm_analyze(asset_name: str, snap: Snapshot, api_key: str, model: str | None,
+                 news: list[str] | None = None):
     try:
-        import anthropic
-    except Exception:
-        return None
-    try:
-        client = anthropic.Anthropic(api_key=api_key)
-        resp = client.messages.create(
-            model=model,
-            max_tokens=1500,
-            thinking={"type": "adaptive"},
-            output_config={
-                "effort": "medium",
-                "format": {"type": "json_schema", "schema": _SCHEMA},
-            },
-            system=_SYSTEM,
-            messages=[{"role": "user", "content": _build_facts_text(asset_name, snap, news)}],
-        )
-        import json
-        text = next((b.text for b in resp.content if b.type == "text"), "")
-        data = json.loads(text)
-        return data["situation"], data["risks"], data["advice"]
+        from . import llm
+        d, _cost = llm.chat(
+            _build_facts_text(asset_name, snap, news),
+            system=_SYSTEM, api_key=api_key, model=model,
+            max_tokens=1500, schema=_SCHEMA, category="行情分析")
+        if not isinstance(d, dict):
+            return None
+        return str(d["situation"]), str(d["risks"]), str(d["advice"])
     except Exception:
         # 任何失败（网络/额度/格式）都静默降级到规则引擎
         return None
