@@ -364,6 +364,12 @@ def render_manage():
     names = [p["name"] for p in catalog]
     active = st.session_state.get("roster_active", [])
 
+    # 自定义添加后的勾选态同步：widget 实例化后不能改其 key，
+    # 故提交处只存 pending，rerun 后在这里（widget 创建前）应用
+    _pend = st.session_state.pop("_roster_sel_pending", None)
+    if _pend is not None:
+        st.session_state["_roster_sel"] = [n for n in _pend if n in names]
+
     sel = st.multiselect(
         "勾选要追踪的人物（取消勾选=移除，展开下拉添加候选）",
         names, default=[n for n in names if n in active],
@@ -402,7 +408,7 @@ def render_manage():
                         act.append(person["name"])
                     st.session_state["roster_custom"] = cust
                     st.session_state["roster_active"] = act
-                    st.session_state["_roster_sel"] = list(act)   # 同步多选框选中态
+                    st.session_state["_roster_sel_pending"] = list(act)   # rerun 后建 widget 前同步
                     roster.save(act, cust)
                     st.success(f"已添加并追踪「{person['name']}」。")
                     st.rerun()
