@@ -117,7 +117,7 @@ def warm(plist, show_tw, tw_key, tw_base, show_sum, anth_key):
             if news and cache_get(f"sum:{p['en']}:{_sig(news)}", SUM_TTL) is None:
                 sjobs.append((p, news))
         if sjobs:
-            sum_model = data.secret("ANTHROPIC_MODEL") or "claude-sonnet-5"
+            sum_model = data.llm_model()   # LLM_MODEL / ANTHROPIC_MODEL / deepseek-v4-flash
             with ThreadPoolExecutor(max_workers=4) as ex:
                 futs = {ex.submit(data.summarize, p["name"], news, anth_key, sum_model):
                         f"sum:{p['en']}:{_sig(news)}" for p, news in sjobs}
@@ -168,7 +168,7 @@ def deep_expander(p, news, anth_key, scope="grid"):
         if not news:
             st.caption("暂无文章可精读。")
         elif not anth_key:
-            st.caption("需配置 ANTHROPIC_API_KEY 才能精读（secrets.toml）。")
+            st.caption("需配置 DEEPSEEK_API_KEY（或回滚用的 ANTHROPIC_API_KEY）才能精读（secrets.toml）。")
         else:
             opts = list(range(len(news[:5])))
             idx = st.selectbox("选择要精读的文章", opts,
@@ -181,7 +181,7 @@ def deep_expander(p, news, anth_key, scope="grid"):
                     with st.spinner("联网读原文并解读中（约 10–30 秒）…"):
                         res = data.deep_read(p["name"], news[idx]["title"],
                                              news[idx]["url"], anth_key,
-                                             model=data.secret("ANTHROPIC_MODEL"))
+                                             model=data.llm_model())
                         if res and res != "__BUDGET__":      # 预算阻断不缓存
                             cache_put(ck, res)
                 st.session_state[f"deepres_{p['en']}"] = (news[idx]["title"], res or "__FAIL__")
@@ -536,7 +536,8 @@ def render():
     else:
         _fresh = "本地暂无数据 —— 点右上「Get the latest」"
     st.caption(f"{_fresh} · 追踪 {len(plist)} 人 · "
-               f"Claude {'✅' if anth_key else '未配置'} · X接口 {'✅' if tw_key else '未配置'} · "
+               f"AI({data.llm_model()}) {'✅' if anth_key else '未配置'} · "
+               f"X接口 {'✅' if tw_key else '未配置'} · "
                f"💰 今日 ${_spent:.3f}/${_cap:.2f}")
     if budget.remaining() <= 0 and _cap > 0:
         st.warning("⚠️ 今日 API 预算已用尽 —— 摘要/精读/推文暂停，新闻与头像不受影响，次日恢复。")

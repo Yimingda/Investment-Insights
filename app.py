@@ -2,7 +2,8 @@
 
 一套 UI 渲染多个品种（黄金 / 加密 / 美股 / A股），每个品种是一个 assets 模块。
 数据：yfinance / FRED / akshare（缺失则降级示例数据）。
-分析：有 ANTHROPIC_API_KEY 用 Claude，否则用规则引擎。
+分析：有大模型 key 就调大模型（默认 DeepSeek V4 Flash；模型名设成 claude-* 即
+      回滚到 Anthropic，路由见 lib/llm.py），否则用规则引擎。
 """
 import faulthandler
 faulthandler.enable()   # 原生库段错误时把崩溃栈打进日志（云端排查 Segmentation fault 用）
@@ -62,10 +63,9 @@ _check_auth()
 
 # ── 工具 ─────────────────────────────────────────────────────
 def anthropic_key() -> str | None:
-    k = data.secret("ANTHROPIC_API_KEY")
-    if k and isinstance(k, str) and k.startswith("sk-ant-") and "xxxx" not in k:
-        return k
-    return None
+    """当前路由所用的大模型 key：模型名 claude* → ANTHROPIC_API_KEY，
+    否则(默认 deepseek-v4-flash) → DEEPSEEK_API_KEY。函数名沿用历史。"""
+    return data.llm_model_key()
 
 
 def render_cost_page():
@@ -223,7 +223,7 @@ def _prewarm_holdings(rows: list[dict]) -> dict:
 
 
 def _intel_tabs(r: dict, a: dict):
-    """📋 深度情报：决策日历 / 最新财报 / 半年大事 / 行业政策（Claude 联网生成 + 存盘）。"""
+    """📋 深度情报：决策日历 / 最新财报 / 半年大事 / 行业政策（AI 联网生成 + 存盘）。"""
     from lib import intel
     code, name = str(r["code"]), a["name"]
     rec = intel.get_stock(code)
@@ -234,20 +234,21 @@ def _intel_tabs(r: dict, a: dict):
     top_a, top_b = st.columns([2.2, 1])
     top_a.caption(f"个股情报更新：{intel.age_str(rec.get('generated_at') if rec else None)} · "
                   f"今日情报花费 ${intel.spent_today():.2f}/${intel.budget_cap():.2f}")
-    if top_b.button(f"🔄 生成/更新（约${intel.EST_STOCK:.2f}）", key=f"gen_{code}",
+    if top_b.button(f"🔄 生成/更新（约${intel.est_stock():.2f}）", key=f"gen_{code}",
                     width="stretch", disabled=not key):
         with st.spinner(f"联网检索 {name} 的财报/事件/日历中…（约 20–60 秒）"):
             res = intel.gen_stock(code, name, key)
         if res == "__BUDGET__":
             st.warning(f"今日情报预算 ${intel.budget_cap():.2f} 已用尽（secrets 里 INTEL_BUDGET_USD 可调）。")
         elif res == "__AUTH__":
-            st.error("ANTHROPIC_API_KEY 无效或已被吊销 —— 请检查 secrets 配置。")
+            st.error("模型 API key 无效或已被吊销 —— 请检查 secrets 配置。")
         elif res is None:
             st.error("生成失败（网络/解析问题），请稍后重试。")
         else:
             st.rerun()
     if not key:
-        st.caption("⚠️ 未配置 ANTHROPIC_API_KEY，无法联网生成；仅显示规则日历。")
+        st.caption("⚠️ 未配置 DEEPSEEK_API_KEY（或回滚用的 ANTHROPIC_API_KEY），"
+                   "无法联网生成；仅显示规则日历。")
 
     t1, t2, t3, t4 = st.tabs(["📅 决策日历", "📑 最新财报", "🗓️ 半年大事", "🏛️ 行业政策"])
 
@@ -302,14 +303,14 @@ def _intel_tabs(r: dict, a: dict):
     with t4:   # 行业政策累计（同行业共享一份）
         pa, pb = st.columns([2.2, 1])
         pa.caption(f"行业：**{ind}** · 政策更新：{intel.age_str(pol.get('generated_at') if pol else None)}")
-        if pb.button(f"🔄 更新政策（约${intel.EST_POLICY:.2f}）", key=f"genp_{code}",
+        if pb.button(f"🔄 更新政策（约${intel.est_policy():.2f}）", key=f"genp_{code}",
                      width="stretch", disabled=not key):
             with st.spinner(f"联网检索「{ind}」行业政策中…"):
                 res = intel.gen_policy(ind, key)
             if res == "__BUDGET__":
                 st.warning("今日情报预算已用尽。")
             elif res == "__AUTH__":
-                st.error("ANTHROPIC_API_KEY 无效或已被吊销 —— 请检查 secrets 配置。")
+                st.error("模型 API key 无效或已被吊销 —— 请检查 secrets 配置。")
             elif res is None:
                 st.error("生成失败，请稍后重试。")
             else:
@@ -635,7 +636,8 @@ snap = module.build_snapshot(refresh=do_refresh)
 libs = data.libs_status()
 dot = "live-dot" if snap.data_live else "sim-dot"
 lib_tags = " · ".join(f"{n}{'✅' if ok else '❌'}" for n, ok in libs.items())
-key_ok = "Claude✅" if anthropic_key() else "Claude（未配置key，用规则引擎）"
+key_ok = (f"AI({data.llm_model()})✅" if anthropic_key()
+          else "AI（未配置key，用规则引擎）")
 st.markdown(
     f"<div style='font-size:11px;color:#5a6070;margin:2px 0 6px'>"
     f"<span class='{dot}'></span>{snap.source_note} · 数据库：{lib_tags} · {key_ok} · "
@@ -725,20 +727,20 @@ with ai_col:
         if st.button("🔄 重新分析", width="stretch", key=f"re_{asset_id}"):
             st.session_state.pop(cache_key, None)
     with b2:
-        force_claude = st.button("🤖 用 Claude 深度分析", width="stretch",
+        force_claude = st.button("🤖 用 AI 深度分析", width="stretch",
                                  key=f"cl_{asset_id}", disabled=key is None)
 
     if force_claude and key:
-        with st.spinner("Claude 分析中…"):
+        with st.spinner("AI 分析中…"):
             st.session_state[cache_key] = ai.analyze(
                 module.name, snap, api_key=key,
-                model=data.secret("ANTHROPIC_MODEL"), news=news_titles)
+                model=data.llm_model(), news=news_titles)
     elif cache_key not in st.session_state:
-        # 默认即时显示（无 key 用规则引擎；不主动消耗 Claude 额度）
+        # 默认即时显示（不传 key → 规则引擎；不主动消耗模型额度）
         st.session_state[cache_key] = ai.analyze(module.name, snap, news=news_titles)
 
     situation, risks, advice, by_claude = st.session_state[cache_key]
-    badge = ("<span class='badge badge-up'>Claude AI</span>" if by_claude
+    badge = (f"<span class='badge badge-up'>{data.llm_model()}</span>" if by_claude
              else "<span class='badge badge-neu'>规则引擎</span>")
     st.markdown(f"分析来源：{badge}", unsafe_allow_html=True)
     st.markdown("**当前形势**"); st.markdown(situation)

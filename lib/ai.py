@@ -1,14 +1,17 @@
-"""智能分析层：有 Anthropic API key 就调用 Claude，否则降级到规则引擎。
+"""智能分析层：有可用的大模型 key 就调用大模型，否则降级到规则引擎。
 
-对外只暴露 analyze()，返回 (当前形势, 主要风险, 投资者建议, 是否由Claude生成)。
+对外只暴露 analyze()，返回 (当前形势, 主要风险, 投资者建议, 是否由AI生成)。
+
+双路由（2026-08）：模型名 claude* → Anthropic；否则 → DeepSeek（lib/llm.py）。
 """
 from __future__ import annotations
 
+from . import llm
 from .model import Snapshot
 
-# 默认模型：Claude Opus 4.8（最强）。可在 secrets 用 ANTHROPIC_MODEL 覆盖为
-# claude-sonnet-4-6 / claude-haiku-4-5 等以控制成本。
-DEFAULT_MODEL = "claude-opus-4-8"
+# 默认模型：DeepSeek V4 Flash（$0.14/$0.28 per MTok，约 Claude Opus 的 1/35）。
+# 可在 secrets 用 LLM_MODEL / ANTHROPIC_MODEL 覆盖；设成 claude-opus-4-8 即回滚。
+DEFAULT_MODEL = "deepseek-v4-flash"
 
 _SYSTEM = (
     "你是一位严谨的中文投资分析师，服务于一个多品种行情监控面板。"
@@ -35,12 +38,32 @@ _SCHEMA = {
 def analyze(asset_name: str, snap: Snapshot, api_key: str | None = None,
             model: str | None = None,
             news: list[str] | None = None) -> tuple[str, str, str, bool]:
+    # api_key 既是「有没有配置」的开关，也是「不主动烧额度」的闸门：
+    # 不传 key（页面默认渲染）一律走规则引擎，与改造前行为一致。
     if api_key:
-        out = _claude_analyze(asset_name, snap, api_key, model or DEFAULT_MODEL, news)
+        mdl = model or DEFAULT_MODEL
+        out = (_claude_analyze(asset_name, snap, api_key, mdl, news)
+               if llm.is_claude(mdl) else _deepseek_analyze(asset_name, snap, mdl, api_key, news))
         if out is not None:
             return out[0], out[1], out[2], True
     s, r, a = _rule_based(asset_name, snap, news)
     return s, r, a, False
+
+
+# ── DeepSeek 实现（无需联网检索：只基于传入的结构化行情+新闻标题）──
+def _deepseek_analyze(asset_name: str, snap: Snapshot, model: str,
+                      api_key: str | None = None, news: list[str] | None = None):
+    try:
+        data, _usage = llm.call_json(
+            model, _build_facts_text(asset_name, snap, news),
+            system=_SYSTEM, allow_search=False, max_tokens=1500,
+            schema=_SCHEMA, api_key=api_key or None)
+        if not data:
+            return None
+        return data["situation"], data["risks"], data["advice"]
+    except Exception:
+        # 任何失败（网络/额度/格式）都静默降级到规则引擎
+        return None
 
 
 # ── Claude 实现 ──────────────────────────────────────────────

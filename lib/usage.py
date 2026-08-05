@@ -96,10 +96,12 @@ def sample_report(days: int = 30):
         daily.append((d.strftime("%Y-%m-%d"), round(v, 2)))
     total = sum(v for _, v in daily)
     by_label = {
-        "claude-opus-4-8": round(total * 0.55, 2),
-        "claude-sonnet-4-6": round(total * 0.22, 2),
-        "claude-haiku-4-5": round(total * 0.08, 2),
-        "Web Search Usage": round(total * 0.09, 2),
-        "Code Execution Usage": round(total * 0.06, 2),
+        # 2026-08 起主力是 DeepSeek（该 API 只报 Anthropic 花费，DeepSeek 需去其控制台看）
+        "deepseek-v4-flash": round(total * 0.50, 2),
+        "claude-opus-4-8": round(total * 0.22, 2),
+        "claude-sonnet-4-6": round(total * 0.13, 2),
+        "claude-haiku-4-5": round(total * 0.05, 2),
+        "Web Search Usage": round(total * 0.06, 2),
+        "Code Execution Usage": round(total * 0.04, 2),
     }
     return {"daily": daily, "by_label": by_label, "total": round(total, 2)}

@@ -1,9 +1,14 @@
 """个股深度情报 —— 决策日历 / 最新财报分析 / 半年大事 / 行业政策累计。
 
-- 内容型数据由 Claude + 联网搜索生成（手动按钮触发），结果存盘 .intel.json 复用。
+- 内容型数据由大模型 + 联网搜索生成（手动按钮触发），结果存盘 .intel.json 复用。
 - 政策按行业归组（12 只 → 9 个行业），同行业共享一份，省生成费用。
 - 独立每日预算 INTEL_BUDGET_USD（默认 $1.00），与人物雷达的预算分开记账。
 - 财报披露日等有法定窗口的，用 rule_calendar() 免费兜底（不依赖 AI）。
+
+模型双路由（2026-08）：模型名 claude* → 原 Anthropic 路径（服务端 web_search +
+结构化输出）；否则 → DeepSeek + lib/llm.py 的客户端 Tavily 检索循环。默认
+deepseek-v4-flash（$0.14/$0.28 per MTok，约 Sonnet 的 1/20）；把 ANTHROPIC_MODEL
+(或 LLM_MODEL) 设回 claude-* 即整体回滚。
 """
 from __future__ import annotations
 
@@ -13,18 +18,22 @@ import threading
 import time
 from datetime import date, datetime, timedelta
 
+from . import llm
+
 _DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _PATH = os.path.join(_DIR, ".intel.json")                 # 本地手动生成(gitignore)
 _BASE_PATH = os.path.join(_DIR, "data", "intel.json")     # 夜间批量刷新提交进仓库(共享层)
 _LEDGER = os.path.join(_DIR, ".intel_ledger.json")
 _LOCK = threading.Lock()
 
-EST_STOCK = 0.40     # 单只个股情报粗估（2次检索+缓存后实测 ~$0.2）
-EST_POLICY = 0.30    # 单个行业政策粗估
+EST_STOCK = 0.40     # 单只个股情报粗估（Claude 口径：2次检索+缓存后实测 ~$0.2）
+EST_POLICY = 0.30    # 单个行业政策粗估（Claude 口径）
 _PRICE = {"claude-opus-4-8": (5.0, 25.0), "claude-sonnet-4-6": (3.0, 15.0),
           "claude-sonnet-5": (3.0, 15.0),   # intro $2/$10 到 2026-08-31,按目录价保守预留
-          "claude-haiku-4-5": (1.0, 5.0)}
-_SEARCH_FEE = 0.02   # 联网检索附加费粗估/次生成
+          "claude-haiku-4-5": (1.0, 5.0),
+          "deepseek-v4-flash": (0.14, 0.28)}
+_SEARCH_FEE = 0.02   # Anthropic 服务端联网检索附加费粗估/次生成（DeepSeek 路径不计）
+_DS_EST_SCALE = 0.05  # DeepSeek 便宜约 20 倍 → 预留额同比缩小，否则 $1 日预算只够两三次
 
 # ── 行业归组（政策共享粒度）─────────────────────────────────
 INDUSTRY_OF = {
@@ -102,8 +111,9 @@ def _settle(est: float, actual: float):
 
 def _cost(model: str, usage) -> float:
     """真实花费。input_tokens 只是未缓存余量——缓存写 1.25×、缓存读 0.1× 必须计入，
-    否则开启 prompt caching 后账本会系统性低估(预算护栏失真)。"""
-    pin, pout = _PRICE.get(model, (5.0, 25.0))
+    否则开启 prompt caching 后账本会系统性低估(预算护栏失真)。
+    （DeepSeek 路径没有 cache_* 字段，退化成 input/output 两项。）"""
+    pin, pout = _PRICE.get(model, (5.0, 25.0) if llm.is_claude(model) else (0.14, 0.28))
     try:
         cw = getattr(usage, "cache_creation_input_tokens", 0) or 0
         cr = getattr(usage, "cache_read_input_tokens", 0) or 0
@@ -270,16 +280,28 @@ _POLICY_SCHEMA = {
     "additionalProperties": False,
 }
 def _model():
-    try:
-        import streamlit as st
-        m = st.secrets.get("ANTHROPIC_MODEL", None)
-    except Exception:
-        m = None
-    m = m or os.environ.get("ANTHROPIC_MODEL") or "claude-sonnet-5"
+    """当前模型。默认 DeepSeek；设成 claude-* 即回滚到 Anthropic 路径。"""
+    m = llm.configured_model()          # LLM_MODEL / ANTHROPIC_MODEL / deepseek-v4-flash
+    if not llm.is_claude(m):
+        return m
     # adaptive thinking / web_search_20260209 需 4.6+ 家族；haiku 等旧模型必 400 → 回退 sonnet
     ok = str(m).startswith(("claude-sonnet-4-6", "claude-sonnet-5", "claude-opus-4-6",
                             "claude-opus-4-7", "claude-opus-4-8", "claude-fable"))
     return m if ok else "claude-sonnet-5"
+
+
+def _est(base: float) -> float:
+    """按路由缩放「预留额」（真实花费仍在调用后按 token 结算）。"""
+    return base if llm.is_claude(_model()) else round(base * _DS_EST_SCALE, 4)
+
+
+def est_stock() -> float:
+    """UI 显示/预留用的单只个股情报估算成本（随模型自动变）。"""
+    return _est(EST_STOCK)
+
+
+def est_policy() -> float:
+    return _est(EST_POLICY)
 
 
 def stock_prompt(code: str, name: str, today: str | None = None) -> str:
@@ -303,6 +325,41 @@ def policy_prompt(industry: str, today: str | None = None) -> str:
 
 def _call_web(prompt: str, api_key: str, max_tokens: int = 6000,
               max_searches: int = 2, schema: dict | None = None) -> tuple[str | None, float]:
+    """联网生成的统一入口：按模型名路由到 Anthropic 或 DeepSeek。
+    返回 (文本, 实际花费)；"__AUTH__" 表示密钥无效。"""
+    if llm.is_claude(_model()):
+        return _call_web_anthropic(prompt, api_key, max_tokens, max_searches, schema)
+    return _call_web_deepseek(prompt, api_key, max_tokens, max_searches, schema)
+
+
+def _call_web_deepseek(prompt: str, api_key: str, max_tokens: int,
+                       max_searches: int, schema: dict | None) -> tuple[str | None, float]:
+    """DeepSeek + 客户端 Tavily 检索循环（llm.call_text）。
+
+    与 Anthropic 路径的差异：没有服务端结构化输出保证 —— schema 以提示词形式下发，
+    由调用方原有的 _parse_json() 容错兜底；也没有服务端检索附加费(_SEARCH_FEE)。"""
+    global _LAST_FAIL
+    _LAST_FAIL = ""
+    mdl = _model()
+    usage = llm.Usage()
+    try:
+        txt, usage = llm.call_text(mdl, prompt, allow_search=True,
+                                   max_tokens=max_tokens, max_searches=max_searches,
+                                   schema=schema, api_key=api_key or None, usage=usage)
+    except llm.LLMAuthError:
+        _LAST_FAIL = "auth"
+        return "__AUTH__", _cost(mdl, usage)
+    except Exception as e:
+        _LAST_FAIL = f"exception:{type(e).__name__}:{str(e)[:180]}"
+        return None, _cost(mdl, usage)      # 已产生的 token 照样记账
+    if not txt:
+        _LAST_FAIL = "no_text(检索循环耗尽或空回复)"
+    return txt, _cost(mdl, usage)
+
+
+def _call_web_anthropic(prompt: str, api_key: str, max_tokens: int = 6000,
+                        max_searches: int = 2, schema: dict | None = None
+                        ) -> tuple[str | None, float]:
     """带 web_search 的单次任务调用（pause_turn 循环）。返回 (文本, 实际花费)。
 
     成本护栏（实测教训：无限制搜索一次能烧 $1.8+）：
@@ -474,7 +531,8 @@ def gen_stock(code: str, name: str, api_key: str) -> dict | str | None:
     rec0 = get_stock(str(code))
     if rec0 and time.time() - float(rec0.get("generated_at") or 0) < 120:
         return rec0        # 双击/排队重复点击 → 2 分钟内直接回缓存，不重复计费
-    if not _reserve(EST_STOCK):
+    est = est_stock()
+    if not _reserve(est):
         return "__BUDGET__"
     actual = 0.0
     prompt = stock_prompt(str(code), name)
@@ -499,7 +557,7 @@ def gen_stock(code: str, name: str, api_key: str) -> dict | str | None:
     except Exception:
         return None
     finally:
-        _settle(EST_STOCK, actual)
+        _settle(est, actual)
 
 
 def gen_policy(industry: str, api_key: str) -> dict | str | None:
@@ -509,7 +567,8 @@ def gen_policy(industry: str, api_key: str) -> dict | str | None:
     rec0 = get_policy(industry)
     if rec0 and time.time() - float(rec0.get("generated_at") or 0) < 120:
         return rec0        # 双击/排队重复点击 → 2 分钟内直接回缓存，不重复计费
-    if not _reserve(EST_POLICY):
+    est = est_policy()
+    if not _reserve(est):
         return "__BUDGET__"
     actual = 0.0
     prompt = policy_prompt(industry)
@@ -532,7 +591,7 @@ def gen_policy(industry: str, api_key: str) -> dict | str | None:
     except Exception:
         return None
     finally:
-        _settle(EST_POLICY, actual)
+        _settle(est, actual)
 
 
 # ── 未来 N 天事件聚合（仪表盘用）────────────────────────────

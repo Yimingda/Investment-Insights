@@ -41,6 +41,19 @@ def secret(key: str, default=None):
         return default
 
 
+# ── 大模型路由（实现见 lib/llm.py：claude* → Anthropic，否则 → DeepSeek）──
+def llm_model() -> str:
+    """当前模型名（LLM_MODEL / ANTHROPIC_MODEL / 默认 deepseek-v4-flash）。"""
+    from . import llm
+    return llm.configured_model()
+
+
+def llm_model_key() -> str | None:
+    """当前模型对应的 key（claude* → ANTHROPIC_API_KEY，否则 DEEPSEEK_API_KEY）。"""
+    from . import llm
+    return llm.api_key_for() or None
+
+
 def libs_status() -> dict[str, bool]:
     """供 UI 显示哪些数据库可用。"""
     return {

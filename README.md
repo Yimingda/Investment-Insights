@@ -35,7 +35,8 @@ lib/                   # 共享基础设施
   indicators.py        # 纯函数：SMA / RSI / 动量 / 回撤
   theme.py             # 暗色主题 CSS + Plotly 图表
   data.py              # yfinance / FRED / akshare / 恐惧贪婪 抓取 + 缓存 + 降级
-  ai.py                # Claude 分析 + 规则引擎降级
+  ai.py                # 大模型分析 + 规则引擎降级
+  llm.py               # DeepSeek 客户端 + Tavily 检索循环（claude* 则走 Anthropic）
 assets/                # 各品种模块（实现统一接口）
   base.py              # 品种基类 + 实时/模拟数据工具
   gold.py / crypto.py / us_equity.py / a_share.py / forex.py
@@ -55,7 +56,13 @@ assets/                # 各品种模块（实现统一接口）
 
 ## 智能分析
 
-- 配置了 `ANTHROPIC_API_KEY` → 点击「用 Claude 深度分析」调用 Claude（默认 `claude-opus-4-8`）。
+- 配置了 `DEEPSEEK_API_KEY` → 点击「用 AI 深度分析」调用大模型（默认 `deepseek-v4-flash`，
+  $0.14/$0.28 per MTok，约 Claude Opus 的 1/35）。
+- 联网检索（个股情报 / 行业政策 / 人物精读）走 Tavily，需要 `TAVILY_API_KEY`；
+  未配置时模型只能用训练知识作答（数据可能滞后）。
+- **回滚**：把 `LLM_MODEL`（或旧的 `ANTHROPIC_MODEL`）设成 `claude-*` 并配好
+  `ANTHROPIC_API_KEY`，即整体切回 Anthropic 路径（服务端 web_search、批量五折都还在，
+  代码未删除）。路由实现见 `lib/llm.py`。
 - 未配置或调用失败 → 自动使用内置**规则引擎**，完全免费、无需联网。
 
 ## 本地运行
@@ -76,7 +83,8 @@ streamlit run app.py
 
 1. `git push` 到 GitHub
 2. [share.streamlit.io](https://share.streamlit.io) → New app → 选仓库与 `app.py` → Deploy
-3. App Settings → Secrets 填写 `ANTHROPIC_API_KEY`（可选 `FINNHUB_API_KEY`、`ANTHROPIC_ADMIN_KEY`、`FRED_API_KEY`、`ANTHROPIC_MODEL`）
+3. App Settings → Secrets 填写 `DEEPSEEK_API_KEY` + `TAVILY_API_KEY`（可选 `LLM_MODEL`、`FINNHUB_API_KEY`、`FRED_API_KEY`；回滚 Claude 时再加 `ANTHROPIC_API_KEY`，💰花费页仍用 `ANTHROPIC_ADMIN_KEY`）
+   - 夜间情报刷新在 GitHub Actions 里跑，密钥要另外配到 **仓库 Settings → Secrets → Actions**：`DEEPSEEK_API_KEY`、`TAVILY_API_KEY`
 
 ## ⚠️ 免责声明
 

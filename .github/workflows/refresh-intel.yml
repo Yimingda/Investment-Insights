@@ -1,10 +1,14 @@
 name: Refresh stock intel (nightly batch)
 
-# 每周日深夜用 Batch API(五折)批量刷新 12 只个股情报 + 9 个行业政策,结果提交进
-# data/intel.json —— 云端/本地 app 直接读取该共享层。两班制: 第一班提交批量,
-# 若批量超 55 分钟未完成则留 pending, 第二班自动回收。
+# 每周日深夜批量刷新 12 只个股情报 + 9 个行业政策,结果提交进 data/intel.json
+# —— 云端/本地 app 直接读取该共享层。
+# 2026-08 起默认走 DeepSeek V4 Flash(并发直调,当场出结果;DeepSeek 无 Batches API,
+# 拿不到五折,但单价约为 Sonnet 的 1/20)。两班制的第二班对 DeepSeek 是空跑(条目已新鲜),
+# 保留是为了把 LLM_MODEL 设回 claude-* 回滚时,批量的 pending 回收仍然有人做。
 # cron 刻意排在低使用时段(北京周一凌晨),因为 push 会触发 Streamlit Cloud 重启。
-# 需要仓库 Secret: ANTHROPIC_API_KEY (Settings → Secrets and variables → Actions)
+# 需要仓库 Secret (Settings → Secrets and variables → Actions):
+#   DEEPSEEK_API_KEY (必填)、TAVILY_API_KEY (联网检索,强烈建议)、
+#   ANTHROPIC_API_KEY (仅回滚 claude-* 时需要)
 on:
   schedule:
     - cron: "0 21 * * 0"         # 周日 21:00 UTC = 北京周一 05:00：提交批量
@@ -28,11 +32,13 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install deps
-        run: pip install --quiet anthropic
+        run: pip install --quiet requests anthropic   # anthropic 仅回滚 claude-* 时用到
       - name: Batch refresh intel
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          ANTHROPIC_MODEL: claude-sonnet-4-6
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}   # 回滚用
+          LLM_MODEL: deepseek-v4-flash          # 改成 claude-sonnet-4-6 即回滚到批量五折
           REFRESH_DAYS: "6"
         run: python scripts/refresh_intel.py
       - name: Commit if changed
