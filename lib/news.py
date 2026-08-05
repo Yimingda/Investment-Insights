@@ -23,7 +23,7 @@ class Headline:
 
 # 品种 → Finnhub 新闻分类
 _FINNHUB_CAT = {"crypto": "crypto", "forex": "forex",
-                "gold": "general", "us_equity": "general"}
+                "gold": "general", "us_equity": "general", "nasdaq": "general"}
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
